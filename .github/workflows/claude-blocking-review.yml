@@ -1,0 +1,159 @@
+name: Claude Blocking Code Review
+
+# Reusable workflow: blocks PR merges when Claude finds bugs, reliability
+# regressions, security issues, or data-loss risks.
+#
+# Usage in a caller workflow:
+#
+#   jobs:
+#     claude-review:
+#       uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v1
+#       with:
+#         pr_number: ${{ github.event.pull_request.number }}
+#         extra_instructions: |
+#           Repo-specific guidance here.
+#       secrets:
+#         claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+#
+# The calling job name ("claude-review" above) becomes the required status
+# check name: "Claude Code Review / claude-review" in branch protection.
+#
+# Escape hatch: add [skip-claude-review: reason] to the PR body to bypass
+# enforcement with an audit trail.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'Pull request number (pass github.event.pull_request.number)'
+        type: number
+        required: true
+      extra_instructions:
+        description: 'Repo-specific instructions appended to the base review prompt'
+        type: string
+        required: false
+        default: ''
+    secrets:
+      claude_oauth_token:
+        description: 'Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN secret)'
+        required: true
+
+jobs:
+  run-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write  # required by claude-code-action for internal authentication
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        continue-on-error: true  # infrastructure failure must not block merges
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ inputs.pr_number }}
+
+            Please review this pull request and provide feedback on:
+            - Code quality and best practices
+            - Potential bugs or logic errors
+            - Reliability regressions (something that used to work may now break)
+            - Security concerns
+            - Test coverage for changed behavior
+
+            Use the repository's CLAUDE.md for guidance on style and conventions.
+            Be constructive and specific — cite file names and line numbers where possible.
+
+            Post your review as a comment on the PR using:
+              gh pr comment ${{ inputs.pr_number }} --body "$(cat /tmp/review.md)"
+
+            ${{ inputs.extra_instructions != '' && format('---\n\nAdditional instructions for this repository:\n\n{0}', inputs.extra_instructions) || '' }}
+
+            ---
+
+            VERDICT INSTRUCTIONS — follow these exactly after posting your comment:
+
+            Write VERDICT: BLOCK if ANY of the following are true:
+            - You found a clear bug that causes incorrect behavior in production (wrong
+              calculation, incorrect condition, off-by-one that affects real data)
+            - You found a reliability regression: a previously working feature or pipeline
+              path may now fail because of changes in this PR
+            - You found a security vulnerability: hardcoded credentials, unvalidated user
+              input reaching a privileged operation, or an auth check that can be bypassed
+            - You found missing error handling on an async operation that would cause a
+              silent failure or surface a raw exception to the user
+            - You found a risk of data loss or data corruption
+
+            Write VERDICT: PASS in all other cases, including:
+            - Style and naming issues
+            - Test coverage gaps that do not affect existing behavior
+            - Performance concerns without measurable impact
+            - Documentation gaps
+            - Code organization suggestions
+            - Informational warnings
+
+            When uncertain between BLOCK and PASS, default to PASS.
+
+            After posting your PR comment, write the verdict:
+              echo "VERDICT: PASS" > /tmp/review-verdict.txt
+              # OR
+              echo "VERDICT: BLOCK" > /tmp/review-verdict.txt
+
+            You MUST write this file. It must contain exactly one line starting with
+            "VERDICT: " followed by either "PASS" or "BLOCK".
+
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *)"'
+
+      - name: Check review verdict
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ inputs.pr_number }}"
+
+          # Escape hatch: [skip-claude-review: reason] in PR body bypasses enforcement
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")
+          if echo "$PR_BODY" | grep -qF '[skip-claude-review]'; then
+            echo "::notice::Claude Code Review enforcement skipped via [skip-claude-review] in PR body."
+            echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Verdict:** SKIPPED (override in PR body)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          VERDICT_FILE="/tmp/review-verdict.txt"
+
+          if [ ! -f "$VERDICT_FILE" ]; then
+            echo "::warning::Review verdict file not found. The review action may not have completed."
+            echo "Defaulting to PASS to avoid blocking on infrastructure failure."
+            echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Verdict:** UNKNOWN (verdict file missing — infrastructure failure, not a code issue)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          VERDICT=$(head -1 "$VERDICT_FILE")
+          echo "Review verdict: $VERDICT"
+          echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+
+          if echo "$VERDICT" | grep -q "VERDICT: BLOCK"; then
+            echo "**Verdict:** BLOCK" >> "$GITHUB_STEP_SUMMARY"
+            echo "See the PR comment for details on the blocking issue(s)." >> "$GITHUB_STEP_SUMMARY"
+            echo "To override after reviewing: add \`[skip-claude-review: reason]\` to the PR body." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Claude Code Review found blocking issues. See the PR comment for details. To override: add [skip-claude-review: reason] to the PR body."
+            exit 1
+          elif echo "$VERDICT" | grep -q "VERDICT: PASS"; then
+            echo "**Verdict:** PASS" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          else
+            echo "::warning::Unexpected verdict format: '$VERDICT'. Expected 'VERDICT: PASS' or 'VERDICT: BLOCK'. Defaulting to PASS."
+            echo "**Verdict:** UNKNOWN (unexpected format — defaulting to PASS)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi

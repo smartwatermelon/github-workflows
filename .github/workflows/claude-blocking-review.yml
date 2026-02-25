@@ -73,16 +73,15 @@ jobs:
             Use the repository's CLAUDE.md for guidance on style and conventions.
             Be constructive and specific — cite file names and line numbers where possible.
 
-            Post your review as a comment on the PR using:
-              gh pr comment ${{ inputs.pr_number }} --body "$(cat /tmp/review.md)"
-
             ${{ inputs.extra_instructions != '' && format('---\n\nAdditional instructions for this repository:\n\n{0}', inputs.extra_instructions) || '' }}
 
             ---
 
-            VERDICT INSTRUCTIONS — follow these exactly after posting your comment:
+            VERDICT INSTRUCTIONS — follow these exactly:
 
-            Write VERDICT: BLOCK if ANY of the following are true:
+            Determine your verdict based on the review findings:
+
+            Use VERDICT: BLOCK if ANY of the following are true:
             - You found a clear bug that causes incorrect behavior in production (wrong
               calculation, incorrect condition, off-by-one that affects real data)
             - You found a reliability regression: a previously working feature or pipeline
@@ -93,7 +92,7 @@ jobs:
               silent failure or surface a raw exception to the user
             - You found a risk of data loss or data corruption
 
-            Write VERDICT: PASS in all other cases, including:
+            Use VERDICT: PASS in all other cases, including:
             - Style and naming issues
             - Test coverage gaps that do not affect existing behavior
             - Performance concerns without measurable impact
@@ -103,13 +102,26 @@ jobs:
 
             When uncertain between BLOCK and PASS, default to PASS.
 
-            After posting your PR comment, write the verdict:
+            You MUST complete ALL of the following steps in order:
+
+            Step 1 — Write your review to /tmp/review.md
+
+            Step 2 — Append the machine-readable verdict as the last line of the review:
+              echo "" >> /tmp/review.md
+              echo "VERDICT: PASS" >> /tmp/review.md
+              # OR (if blocking issues found):
+              echo "VERDICT: BLOCK" >> /tmp/review.md
+
+            Step 3 — Post the review as a PR comment (the verdict line will be at the end):
+              gh pr comment ${{ inputs.pr_number }} --body "$(cat /tmp/review.md)"
+
+            Step 4 — Write the verdict to the verdict file:
               echo "VERDICT: PASS" > /tmp/review-verdict.txt
-              # OR
+              # OR:
               echo "VERDICT: BLOCK" > /tmp/review-verdict.txt
 
-            You MUST write this file. It must contain exactly one line starting with
-            "VERDICT: " followed by either "PASS" or "BLOCK".
+            The verdict file (Step 4) is the primary signal read by CI. The verdict line
+            appended to the comment (Step 2) is the fallback. Both must match.
 
           claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *)"'
 

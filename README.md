@@ -62,12 +62,13 @@ In **Settings → Branches → Branch protection rules → [your branch]**,
 add this required status check:
 
 ```
-Claude Code Review / claude-review
+claude-review / run-review
 ```
 
-The check name is always `{caller workflow name} / {caller job name}`.
-If you name your caller workflow `Claude Code Review` and job `claude-review`,
-the check name matches the example above regardless of which repo you're in.
+With reusable workflows, GitHub reports the **inner job** as the status check.
+The check name is `{caller job name} / {inner job name}`. If you name your
+caller job `claude-review`, the check name will always be
+`claude-review / run-review` regardless of which repo you're in.
 
 ### Threshold calibration
 

@@ -130,16 +130,29 @@ jobs:
           fi
 
           VERDICT_FILE="/tmp/review-verdict.txt"
+          VERDICT=""
 
-          if [ ! -f "$VERDICT_FILE" ]; then
-            echo "::warning::Review verdict file not found. The review action may not have completed."
-            echo "Defaulting to PASS to avoid blocking on infrastructure failure."
-            echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Verdict:** UNKNOWN (verdict file missing — infrastructure failure, not a code issue)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          if [ -f "$VERDICT_FILE" ]; then
+            VERDICT=$(head -1 "$VERDICT_FILE")
+            echo "Verdict source: file"
+          else
+            # Fallback: Claude sometimes includes the verdict in the comment body
+            # instead of writing a separate file. Parse the most recent PR comment.
+            echo "::warning::Verdict file not found — falling back to PR comment parsing."
+            COMMENT=$(gh pr view "$PR_NUMBER" --json comments -q '.comments[-1].body' 2>/dev/null || echo "")
+            if echo "$COMMENT" | grep -q "VERDICT: BLOCK"; then
+              VERDICT="VERDICT: BLOCK"
+              echo "Verdict source: PR comment (fallback)"
+            elif echo "$COMMENT" | grep -q "VERDICT: PASS"; then
+              VERDICT="VERDICT: PASS"
+              echo "Verdict source: PR comment (fallback)"
+            else
+              echo "::warning::No verdict found in file or PR comment. Defaulting to PASS."
+              echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Verdict:** UNKNOWN (no verdict found — infrastructure failure or review incomplete)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
           fi
-
-          VERDICT=$(head -1 "$VERDICT_FILE")
           echo "Review verdict: $VERDICT"
           echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
 

@@ -72,6 +72,9 @@ jobs:
 
             Use the repository's CLAUDE.md for guidance on style and conventions.
             Be constructive and specific — cite file names and line numbers where possible.
+            When listing non-blocking observations, order them by maintenance impact:
+            issues that will predictably cause test drift or duplicated bugs should
+            appear before stylistic or organizational notes.
 
             ${{ inputs.extra_instructions != '' && format('---\n\nAdditional instructions for this repository:\n\n{0}', inputs.extra_instructions) || '' }}
 
@@ -99,6 +102,25 @@ jobs:
             - Documentation gaps
             - Code organization suggestions
             - Informational warnings
+
+            EVIDENCE STANDARD FOR RELIABILITY REGRESSION BLOCKs:
+
+            You cannot run the test suite. When claiming a test will fail or a code
+            path will regress, you must trace the execution path from entry point to
+            the specific assertion or failure point, with line-number citations at each
+            step. If your trace relies on assumed execution order you have not verified
+            in the diff or source, downgrade to PASS with a named observation instead.
+
+              ❌ "validateEntitlements() is now called before CLAUDE_API_KEY is checked,
+                 so the 503 test will fail." → Requires verifying actual call order. If
+                 you cannot cite the lines proving that order, issue PASS.
+
+              ✓ "Line 42 calls foo(), which at line 71 sets X to null; the assertion at
+                 line 265 expects X to be non-null — that assertion will fail." → BLOCK.
+
+              ✓ "The test fixture at line 48 does not set REVENUECAT_API_SECRET, but the
+                 handler reads it at line 89 and returns early if absent — the test will
+                 never reach the code path it claims to exercise." → BLOCK.
 
             When uncertain between BLOCK and PASS, default to PASS.
 

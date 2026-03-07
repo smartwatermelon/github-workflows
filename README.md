@@ -86,35 +86,63 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 | Tag | Meaning |
 |-----|---------|
 | `@v1` | Current stable major version (floating — gets minor updates) |
-| `@v1.1.0` | Latest pinned release |
-| `@v1.0.0` | Previous pinned release |
+| `@v1.2.0` | Latest pinned release |
+| `@v1.1.0` | Previous pinned release |
+| `@v1.0.0` | Initial release |
 | `@main` | Latest (may include breaking changes) |
 
 ---
 
-## `claude.yml` — Claude Code Assistant
+## `claude-assistant`
 
-Enables `@claude` mentions in issues, PR review comments, and PR reviews to
-invoke Claude Code interactively.
+Reusable workflow that invokes Claude Code Action. The caller handles triggers
+and the `author_association` auth guard; this workflow handles the Claude
+invocation itself.
 
-### Security requirement
+### Setup
 
-The workflow **must** restrict triggers to trusted contributors using
-`author_association`. Without this guard, any GitHub user can open an issue
-with injected instructions and Claude will execute them
-([clinejection-style attack](https://grith.ai/blog/clinejection-when-your-ai-tool-installs-another)).
-
-The correct `if:` condition:
+Create `.github/workflows/claude.yml` in your repo:
 
 ```yaml
-if: |
-  (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
-  (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
-  (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
-  (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
+    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v1
+    secrets:
+      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
-Do not grant `id-token: write` unless the workflow uses OIDC authentication.
+Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
+
+### Security note
+
+The `author_association` guard in the `if:` condition **must stay in the caller**
+and must not be removed. Without it, any GitHub user can open an issue with
+injected instructions and Claude will execute them
+([clinejection-style attack](https://grith.ai/blog/clinejection-when-your-ai-tool-installs-another)).
+The reusable workflow cannot enforce this guard itself — it must be in the
+calling workflow's job condition.
+
+### Compatibility
+
+Requires `CLAUDE_CODE_OAUTH_TOKEN`. Repos using `anthropic_api_key` directly
+are not compatible with this reusable workflow.
 
 ---
 

@@ -20,6 +20,10 @@ bugs, reliability regressions, security vulnerabilities, or data-loss risks.
 Style issues, coverage gaps, performance concerns, and docs are always **PASS**.
 When uncertain, Claude defaults to **PASS**.
 
+Regression BLOCKs require a **line-level code path trace** — Claude must identify
+the specific file, line, and execution path that causes the failure. Assertions about
+test failures without traceable evidence default to PASS.
+
 ### Escape hatch
 
 Add `[skip-claude-review: reason]` to the PR body to bypass enforcement.
@@ -82,5 +86,46 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 | Tag | Meaning |
 |-----|---------|
 | `@v1` | Current stable major version (floating — gets minor updates) |
-| `@v1.0.0` | Pinned release |
+| `@v1.1.0` | Latest pinned release |
+| `@v1.0.0` | Previous pinned release |
 | `@main` | Latest (may include breaking changes) |
+
+---
+
+## `claude.yml` — Claude Code Assistant
+
+Enables `@claude` mentions in issues, PR review comments, and PR reviews to
+invoke Claude Code interactively.
+
+### Security requirement
+
+The workflow **must** restrict triggers to trusted contributors using
+`author_association`. Without this guard, any GitHub user can open an issue
+with injected instructions and Claude will execute them
+([clinejection-style attack](https://grith.ai/blog/clinejection-when-your-ai-tool-installs-another)).
+
+The correct `if:` condition:
+
+```yaml
+if: |
+  (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+  (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+  (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
+  (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
+```
+
+Do not grant `id-token: write` unless the workflow uses OIDC authentication.
+
+---
+
+## Audit script
+
+`claude-review-audit.sh` audits Claude Review configuration across all
+non-archived repos under `smartwatermelon` and `nightowlstudiollc`. Read-only —
+reports gaps but makes no changes.
+
+```bash
+./claude-review-audit.sh [--verbose]
+```
+
+Requires: `gh` CLI (authenticated), `jq`, `bash` 4.0+.

@@ -1,0 +1,56 @@
+name: Claude Code Assistant
+
+# Reusable workflow: invokes Claude Code Action when @claude is mentioned.
+# The caller workflow is responsible for event triggers and the
+# author_association guard that restricts who can invoke Claude.
+#
+# Usage in a caller workflow:
+#
+#   jobs:
+#     claude:
+#       if: |
+#         (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+#         (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
+#         (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
+#         (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
+#       uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v1
+#       secrets:
+#         claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+on:
+  workflow_call:
+    secrets:
+      claude_oauth_token:
+        description: 'Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN secret)'
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read # Required for Claude to read CI results on PRs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@26ec041249acb0a944c0a47b6c0c13f05dbc5b44 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
+
+          # Required for Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+
+          # Optional: Give a custom prompt to Claude. If not specified, Claude
+          # performs the instructions in the comment that tagged it.
+          # prompt: 'Update the pull request description to include a summary of changes.'
+
+          # Optional: restrict which tools Claude can use
+          # claude_args: '--allowed-tools Bash(gh pr:*)'

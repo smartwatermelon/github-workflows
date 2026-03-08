@@ -22,7 +22,7 @@ on:
     secrets:
       claude_oauth_token:
         description: 'Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN secret)'
-        required: true
+        required: false
 
 jobs:
   run:

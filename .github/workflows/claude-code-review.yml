@@ -12,6 +12,12 @@ name: Claude Code Review
 #   2. (Optional) Branch protection rule requiring status check:
 #      "Claude Code Review / claude-review / run-review"
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]

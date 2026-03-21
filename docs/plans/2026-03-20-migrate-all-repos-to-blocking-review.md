@@ -94,7 +94,7 @@ jobs:
 **After** (blocking review caller, ~20 lines):
 
 ```yaml
-name: Claude Code Review
+name: Claude Blocking Review
 
 permissions:
   contents: read
@@ -216,7 +216,7 @@ git checkout -b "$BRANCH" origin/main
 
 # 1. Replace claude-code-review.yml
 cat > .github/workflows/claude-code-review.yml << 'WORKFLOW'
-name: Claude Code Review
+name: Claude Blocking Review
 
 permissions:
   contents: read
@@ -322,7 +322,7 @@ After each PR is merged:
 The migration changes the status check name:
 
 - **Old** (plugin-based): `Claude Code Review / claude-review` (from step ID)
-- **New** (reusable workflow): `Claude Code Review / claude-review / run-review`
+- **New** (reusable workflow): `Claude Blocking Review / claude-review / run-review`
 
 Any existing branch protection referencing the old check name must be updated.
 Repos without branch protection for reviews should have it added.
@@ -340,7 +340,7 @@ CURRENT=$(gh api repos/OWNER/REPO/branches/main/protection 2>/dev/null || echo "
 
 # The script should handle both cases:
 #   1. Remove old check name if present
-#   2. Add new check name: "Claude Code Review / claude-review / run-review"
+#   2. Add new check name: "Claude Blocking Review / claude-review / run-review"
 #   3. Preserve all other existing checks and settings
 ```
 
@@ -371,7 +371,7 @@ means a broken review never blocks merges permanently.
 
 - All 19 repos use `claude-blocking-review.yml@v1` for code review
 - All 19 repos use `claude-assistant.yml@v1` for @claude interactions
-- All 19 repos have branch protection requiring `Claude Code Review / claude-review / run-review`
+- All 19 repos have branch protection requiring `Claude Blocking Review / claude-review / run-review`
 - No review takes >4 minutes or >6 turns on a typical PR
 - Review cost per PR < $0.15 (down from potential $1+)
 - No regressions in existing CI workflows

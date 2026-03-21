@@ -1,4 +1,4 @@
-name: Claude Blocking Code Review
+name: Claude Blocking Review
 
 # Reusable workflow: blocks PR merges when Claude finds bugs, reliability
 # regressions, security issues, or data-loss risks.
@@ -16,7 +16,7 @@ name: Claude Blocking Code Review
 #         claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 #
 # The calling job name ("claude-review" above) becomes the required status
-# check name: "Claude Code Review / claude-review" in branch protection.
+# check name: "Claude Blocking Review / claude-review / run-review" in branch protection.
 #
 # Escape hatch: add [skip-claude-review: reason] to the PR body to bypass
 # enforcement with an audit trail.

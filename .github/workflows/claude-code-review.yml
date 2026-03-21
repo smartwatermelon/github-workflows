@@ -1,4 +1,4 @@
-name: Claude Code Review
+name: Claude Blocking Review
 
 # Example caller workflow for claude-blocking-review.yml.
 # Copy this file into your repository's .github/workflows/ directory,
@@ -10,7 +10,7 @@ name: Claude Code Review
 # Prerequisites:
 #   1. CLAUDE_CODE_OAUTH_TOKEN secret available (repo or org level)
 #   2. (Optional) Branch protection rule requiring status check:
-#      "Claude Code Review / claude-review / run-review"
+#      "Claude Blocking Review / claude-review / run-review"
 
 permissions:
   contents: read

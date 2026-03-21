@@ -33,6 +33,21 @@ on:
         type: string
         required: false
         default: ''
+      max_turns:
+        description: 'Maximum Claude API turns (prevents runaway exploration). Default: 6.'
+        type: number
+        required: false
+        default: 6
+      timeout_minutes:
+        description: 'Hard timeout for the Claude review step in minutes. Default: 4.'
+        type: number
+        required: false
+        default: 4
+      model:
+        description: 'Claude model ID. Default: claude-sonnet-4-6.'
+        type: string
+        required: false
+        default: 'claude-sonnet-4-6'
     secrets:
       claude_oauth_token:
         description: 'Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN secret)'
@@ -53,8 +68,39 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Validate inputs
+        env:
+          MODEL: ${{ inputs.model }}
+          MAX_TURNS: ${{ inputs.max_turns }}
+          TIMEOUT: ${{ inputs.timeout_minutes }}
+        run: |
+          # Validate model: alphanumeric, dots, hyphens only
+          if ! echo "$MODEL" | grep -qE '^[a-zA-Z0-9._-]+$'; then
+            echo "::error::Invalid model name. Must match [a-zA-Z0-9._-]+"
+            exit 1
+          fi
+          # Validate max_turns: positive integer, capped at 20
+          if ! echo "$MAX_TURNS" | grep -qE '^[0-9]+$'; then
+            echo "::error::max_turns must be a positive integer"
+            exit 1
+          fi
+          if [ "$MAX_TURNS" -lt 1 ] || [ "$MAX_TURNS" -gt 20 ]; then
+            echo "::error::max_turns must be between 1 and 20"
+            exit 1
+          fi
+          # Validate timeout_minutes: between 1 and 15
+          if ! echo "$TIMEOUT" | grep -qE '^[0-9]+$'; then
+            echo "::error::timeout_minutes must be a positive integer"
+            exit 1
+          fi
+          if [ "$TIMEOUT" -lt 1 ] || [ "$TIMEOUT" -gt 15 ]; then
+            echo "::error::timeout_minutes must be between 1 and 15"
+            exit 1
+          fi
+
       - name: Run Claude Code Review
         id: claude-review
+        timeout-minutes: ${{ inputs.timeout_minutes }}
         continue-on-error: true  # infrastructure failure must not block merges
         uses: anthropics/claude-code-action@v1
         with:
@@ -62,6 +108,13 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ inputs.pr_number }}
+
+            SCOPE CONSTRAINTS — follow these strictly:
+            - Read the PR diff using `gh pr diff`
+            - Read changed files for immediate context around modified lines
+            - Do NOT explore the broader codebase, run tests, or investigate unrelated files
+            - Focus your review on the diff — do not review unchanged code
+            - Complete your review in as few steps as possible
 
             Please review this pull request and provide feedback on:
             - Code quality and best practices
@@ -145,7 +198,7 @@ jobs:
             The verdict file (Step 4) is the primary signal read by CI. The verdict line
             appended to the comment (Step 2) is the fallback. Both must match.
 
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *)"'
+          claude_args: '--max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }} --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *)"'
 
       - name: Check review verdict
         if: always()

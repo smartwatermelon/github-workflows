@@ -5,6 +5,12 @@ name: Claude Blocking Review
 #
 # Usage in a caller workflow:
 #
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#     issues: write
+#     id-token: write
+#
 #   jobs:
 #     claude-review:
 #       uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v1
@@ -67,6 +73,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Verify caller permissions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if ! gh api "repos/${REPO}/pulls/${PR_NUMBER}" --silent 2>/dev/null; then
+            echo "::error::Permission check failed."
+            echo "::error::The caller workflow must declare top-level permissions:"
+            echo "::error::  contents: read, pull-requests: write, issues: write, id-token: write"
+            exit 1
+          fi
 
       - name: Validate inputs
         env:
@@ -204,8 +223,8 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
-          PR_NUMBER="${{ inputs.pr_number }}"
 
           # Escape hatch: [skip-claude-review: reason] in PR body bypasses enforcement
           PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")

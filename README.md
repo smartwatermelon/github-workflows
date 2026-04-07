@@ -157,3 +157,8 @@ reports gaps but makes no changes.
 ```
 
 Requires: `gh` CLI (authenticated), `jq`, `bash` 4.0+.
+
+### Excluding repos
+
+Add repos to `.claude-review-ignore` (one `owner/repo` per line) to skip them
+in audits. Useful for repos that should never have the review installed.

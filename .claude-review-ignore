@@ -5,4 +5,4 @@
 # The audit script (claude-review-audit.sh) skips these repos entirely.
 # Use this for repos that should never have the review installed.
 
-nightowlstudiollc/network-agent
+nightowlstudiollc/networth-agent

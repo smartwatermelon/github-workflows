@@ -26,6 +26,7 @@ declare -A OWNER_TYPES=(
 )
 OWNERS=("smartwatermelon" "nightowlstudiollc")
 TARGET_SECRET="CLAUDE_CODE_OAUTH_TOKEN"
+IGNORE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.claude-review-ignore"
 VERBOSE="${1:-}"
 if [[ -n "${VERBOSE}" && "${VERBOSE}" != "--verbose" ]]; then
   printf "Warning: unrecognized argument '%s'. Usage: ./%s [--verbose]\n" \
@@ -38,9 +39,21 @@ fail() { printf "  ❌ %s\n" "${*}"; }
 warn() { printf "  ⚠️  %s\n" "${*}"; }
 info() { [[ "${VERBOSE}" == "--verbose" ]] && printf "  ℹ  %s\n" "${*}" || true; }
 
+# ── load ignore list ───────────────────────────────────────────────────────────
+declare -A IGNORED_REPOS=()
+if [[ -f "${IGNORE_FILE}" ]]; then
+  while IFS= read -r line; do
+    line="${line%%#*}" # strip inline comments
+    line="${line// /}" # strip whitespace
+    [[ -z "${line}" ]] && continue
+    IGNORED_REPOS["${line}"]=1
+  done <"${IGNORE_FILE}"
+fi
+
 # ── global accumulators ─────────────────────────────────────────────────────────
 declare -a REPOS_WITH_ISSUES=()
 declare -a ISSUE_LINES=()
+declare -a SKIPPED_REPOS=()
 TOTAL_REPOS=0
 TOTAL_ISSUES=0
 
@@ -355,6 +368,11 @@ for owner in "${OWNERS[@]}"; do
 
   while IFS= read -r repo; do
     [[ -z "${repo}" ]] && continue
+    if [[ -n "${IGNORED_REPOS["${owner}/${repo}"]:-}" ]]; then
+      SKIPPED_REPOS+=("${owner}/${repo}")
+      [[ "${VERBOSE}" == "--verbose" ]] && printf "  ⏭  %s/%s (in .claude-review-ignore)\n" "${owner}" "${repo}"
+      continue
+    fi
     check_repo "${owner}" "${repo}"
   done <<<"${repos}"
 done
@@ -364,6 +382,7 @@ printf "\n\n══════════════════════�
 printf "  FINAL SUMMARY\n"
 printf "══════════════════════════════════════════════════════════\n"
 printf "  Repos scanned    : %d\n" "${TOTAL_REPOS}"
+printf "  Repos ignored    : %d\n" "${#SKIPPED_REPOS[@]}"
 printf "  Repos with issues: %d\n" "${#REPOS_WITH_ISSUES[@]}"
 printf "  Total issues     : %d\n" "${TOTAL_ISSUES}"
 
@@ -378,6 +397,13 @@ else
   printf "\n  All issues by repo:\n"
   for line in "${ISSUE_LINES[@]}"; do
     printf "    • %s\n" "${line}"
+  done
+fi
+
+if [[ "${#SKIPPED_REPOS[@]}" -gt 0 ]]; then
+  printf "\n  ⏭  Ignored repos (.claude-review-ignore):\n"
+  for r in "${SKIPPED_REPOS[@]}"; do
+    printf "    - %s\n" "${r}"
   done
 fi
 

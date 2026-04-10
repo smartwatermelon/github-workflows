@@ -3,6 +3,12 @@ name: Claude Blocking Review
 # Reusable workflow: blocks PR merges when Claude finds bugs, reliability
 # regressions, security issues, or data-loss risks.
 #
+# By default, review parameters are auto-estimated from the PR diff size:
+#   - Model: haiku for ≤500-line diffs, sonnet for larger diffs
+#   - max_turns: scaled from diff size with 20% buffer (min 6, max 50)
+#   - timeout: scaled from max_turns (min 4m, max 30m)
+# Callers can override any parameter explicitly.
+#
 # Usage in a caller workflow:
 #
 #   permissions:
@@ -40,20 +46,20 @@ on:
         required: false
         default: ''
       max_turns:
-        description: 'Maximum Claude API turns (prevents runaway exploration). Default: 20.'
+        description: 'Maximum Claude API turns. 0 = auto-estimate from diff size. Callers can override.'
         type: number
         required: false
-        default: 20
+        default: 0
       timeout_minutes:
-        description: 'Hard timeout for the Claude review step in minutes. Default: 10.'
+        description: 'Hard timeout for the Claude review step in minutes. 0 = auto-estimate from diff size.'
         type: number
         required: false
-        default: 10
+        default: 0
       model:
-        description: 'Claude model ID. Default: claude-sonnet-4-6.'
+        description: 'Claude model ID. "auto" = haiku for small diffs, sonnet for large (>500 lines).'
         type: string
         required: false
-        default: 'claude-sonnet-4-6'
+        default: 'auto'
     secrets:
       claude_oauth_token:
         description: 'Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN secret)'
@@ -93,33 +99,97 @@ jobs:
           MAX_TURNS: ${{ inputs.max_turns }}
           TIMEOUT: ${{ inputs.timeout_minutes }}
         run: |
-          # Validate model: alphanumeric, dots, hyphens only
-          if ! echo "$MODEL" | grep -qE '^[a-zA-Z0-9._-]+$'; then
-            echo "::error::Invalid model name. Must match [a-zA-Z0-9._-]+"
+          # Validate model: "auto" or alphanumeric/dots/hyphens
+          if [ "$MODEL" != "auto" ] && ! echo "$MODEL" | grep -qE '^[a-zA-Z0-9._-]+$'; then
+            echo "::error::Invalid model name. Must be 'auto' or match [a-zA-Z0-9._-]+"
             exit 1
           fi
-          # Validate max_turns: positive integer, capped at 20
+          # Validate max_turns: 0 (auto) or 1-50
           if ! echo "$MAX_TURNS" | grep -qE '^[0-9]+$'; then
-            echo "::error::max_turns must be a positive integer"
+            echo "::error::max_turns must be a non-negative integer"
             exit 1
           fi
-          if [ "$MAX_TURNS" -lt 1 ] || [ "$MAX_TURNS" -gt 20 ]; then
-            echo "::error::max_turns must be between 1 and 20"
+          if [ "$MAX_TURNS" -gt 50 ]; then
+            echo "::error::max_turns must be between 0 and 50 (0 = auto)"
             exit 1
           fi
-          # Validate timeout_minutes: between 1 and 15
+          # Validate timeout_minutes: 0 (auto) or 1-30
           if ! echo "$TIMEOUT" | grep -qE '^[0-9]+$'; then
-            echo "::error::timeout_minutes must be a positive integer"
+            echo "::error::timeout_minutes must be a non-negative integer"
             exit 1
           fi
-          if [ "$TIMEOUT" -lt 1 ] || [ "$TIMEOUT" -gt 15 ]; then
-            echo "::error::timeout_minutes must be between 1 and 15"
+          if [ "$TIMEOUT" -gt 30 ]; then
+            echo "::error::timeout_minutes must be between 0 and 30 (0 = auto)"
             exit 1
           fi
 
+      - name: Estimate review parameters
+        id: estimate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MODEL_INPUT: ${{ inputs.model }}
+          MAX_TURNS_INPUT: ${{ inputs.max_turns }}
+          TIMEOUT_INPUT: ${{ inputs.timeout_minutes }}
+        run: |
+          DIFF_LINES=$(gh pr diff "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" | wc -l | tr -d ' ')
+          echo "Diff size: $DIFF_LINES lines"
+
+          # --- Model selection ---
+          if [ "$MODEL_INPUT" != "auto" ]; then
+            MODEL="$MODEL_INPUT"
+            echo "Model override: $MODEL"
+          elif [ "$DIFF_LINES" -gt 500 ]; then
+            MODEL="claude-sonnet-4-6"
+            echo "Large diff → claude-sonnet-4-6"
+          else
+            MODEL="claude-haiku-4-5"
+            echo "Small diff → claude-haiku-4-5"
+          fi
+
+          # --- Turn estimation ---
+          # Base: 4 turns (read diff, review, post comment, write verdict)
+          # +1 turn per ~150 lines of diff (file reads, reasoning)
+          # +20% buffer, minimum 6
+          if [ "$MAX_TURNS_INPUT" -gt 0 ]; then
+            MAX_TURNS="$MAX_TURNS_INPUT"
+            echo "max_turns override: $MAX_TURNS"
+          else
+            ESTIMATED=$((4 + DIFF_LINES / 150))
+            MAX_TURNS=$(( (ESTIMATED * 120 + 99) / 100 ))
+            if [ "$MAX_TURNS" -lt 6 ]; then MAX_TURNS=6; fi
+            if [ "$MAX_TURNS" -gt 50 ]; then MAX_TURNS=50; fi
+            echo "Estimated turns: $ESTIMATED → with 20% buffer: $MAX_TURNS"
+          fi
+
+          # --- Timeout estimation ---
+          # ~30s per turn as baseline, +20% buffer, minimum 4 minutes
+          if [ "$TIMEOUT_INPUT" -gt 0 ]; then
+            TIMEOUT="$TIMEOUT_INPUT"
+            echo "timeout_minutes override: $TIMEOUT"
+          else
+            TIMEOUT_SECS=$(( MAX_TURNS * 30 * 120 / 100 ))
+            TIMEOUT=$(( (TIMEOUT_SECS + 59) / 60 ))
+            if [ "$TIMEOUT" -lt 4 ]; then TIMEOUT=4; fi
+            if [ "$TIMEOUT" -gt 30 ]; then TIMEOUT=30; fi
+            echo "Estimated timeout: ${TIMEOUT}m"
+          fi
+
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "max_turns=$MAX_TURNS" >> "$GITHUB_OUTPUT"
+          echo "timeout_minutes=$TIMEOUT" >> "$GITHUB_OUTPUT"
+
+          echo "### Review Parameters" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Parameter | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Diff lines | $DIFF_LINES |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Model | $MODEL |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Max turns | $MAX_TURNS |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Timeout | ${TIMEOUT}m |" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run Claude Code Review
         id: claude-review
-        timeout-minutes: ${{ inputs.timeout_minutes }}
+        timeout-minutes: ${{ steps.estimate.outputs.timeout_minutes }}
         continue-on-error: true  # infrastructure failure must not block merges
         uses: anthropics/claude-code-action@v1
         with:
@@ -217,15 +287,15 @@ jobs:
             The verdict file (Step 4) is the primary signal read by CI. The verdict line
             appended to the comment (Step 2) is the fallback. Both must match.
 
-          claude_args: '--max-turns ${{ inputs.max_turns }} --model ${{ inputs.model }} --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *)"'
+          claude_args: '--max-turns ${{ steps.estimate.outputs.max_turns }} --model ${{ steps.estimate.outputs.model }} --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *)"'
 
       - name: Check review verdict
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          CLAUDE_OUTCOME: ${{ steps.claude-review.outcome }}
         run: |
-
           # Escape hatch: [skip-claude-review: reason] in PR body bypasses enforcement
           PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")
           if echo "$PR_BODY" | grep -qF '[skip-claude-review]'; then
@@ -253,10 +323,20 @@ jobs:
               VERDICT="VERDICT: PASS"
               echo "Verdict source: PR comment (fallback)"
             else
-              echo "::warning::No verdict found in file or PR comment. Defaulting to PASS."
-              echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Verdict:** UNKNOWN (no verdict found — infrastructure failure or review incomplete)" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
+              # No verdict found — distinguish exhaustion from infrastructure failure
+              if [ "$CLAUDE_OUTCOME" = "failure" ]; then
+                echo "::error::Review did not complete (likely exceeded turn limit or timed out). No verdict rendered."
+                echo "::error::Re-push to retry, or add [skip-claude-review: reason] to the PR body to bypass."
+                echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+                echo "**Verdict:** INCOMPLETE — review exceeded turn limit or timed out." >> "$GITHUB_STEP_SUMMARY"
+                echo "Re-push to retry or add \`[skip-claude-review: reason]\` to bypass." >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              else
+                echo "::warning::No verdict found but Claude step did not fail. Defaulting to PASS (infrastructure issue)."
+                echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+                echo "**Verdict:** UNKNOWN (infrastructure issue — defaulting to PASS)" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
             fi
           fi
           echo "Review verdict: $VERDICT"

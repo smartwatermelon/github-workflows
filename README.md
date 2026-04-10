@@ -31,7 +31,7 @@ Review parameters are estimated automatically from the PR diff size:
 | Parameter | Logic | Range |
 |-----------|-------|-------|
 | **Model** | Sonnet (callers can override) | `claude-sonnet-4-6` |
-| **Max turns** | `10 + lines/150`, +20% buffer | 12–50 |
+| **Max turns** | `10 + lines/150`, +20% buffer | 25–50 |
 | **Timeout** | `turns × 30s × 1.2` | 4–30 minutes |
 
 Callers can override any parameter:

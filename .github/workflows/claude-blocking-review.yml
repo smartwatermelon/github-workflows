@@ -5,7 +5,7 @@ name: Claude Blocking Review
 #
 # By default, review parameters are auto-estimated from the PR diff size:
 #   - Model: sonnet (callers can override)
-#   - max_turns: 10 + lines/150, +20% buffer (min 12, max 50)
+#   - max_turns: 10 + lines/150, +20% buffer (min 25, max 50)
 #   - timeout: scaled from max_turns (min 4m, max 30m)
 # Callers can override any parameter explicitly.
 #
@@ -145,19 +145,25 @@ jobs:
           fi
 
           # --- Turn estimation ---
-          # A review has significant fixed overhead: read diff, read each changed
-          # file for context, reason about findings, write review to file, append
-          # verdict, post PR comment, write verdict file. Even a small diff needs
-          # ~10 turns. Base 10, +1 per 150 lines, min 12, +20% buffer.
+          # The fixed overhead of a review is high and varies by repo:
+          #   - Read diff (1+ turns)
+          #   - Read CLAUDE.md for conventions (repos can have 400+ line files)
+          #   - Read each changed file for context (1+ turns per file)
+          #   - Reason about findings
+          #   - Write review, append verdict, post comment, write verdict file (3-4 turns)
+          # Plus extra_instructions add repo-specific review scope.
+          # Minimum 25 turns covers this overhead generously — unused turns are
+          # free, only wall-clock time costs money, and the timeout is the real
+          # cost guard. Scale up for large diffs.
           if [ "$MAX_TURNS_INPUT" -gt 0 ]; then
             MAX_TURNS="$MAX_TURNS_INPUT"
             echo "max_turns override: $MAX_TURNS"
           else
             ESTIMATED=$((10 + DIFF_LINES / 150))
             MAX_TURNS=$(( (ESTIMATED * 120 + 99) / 100 ))
-            if [ "$MAX_TURNS" -lt 12 ]; then MAX_TURNS=12; fi
+            if [ "$MAX_TURNS" -lt 25 ]; then MAX_TURNS=25; fi
             if [ "$MAX_TURNS" -gt 50 ]; then MAX_TURNS=50; fi
-            echo "Estimated turns: $ESTIMATED → with 20% buffer: $MAX_TURNS"
+            echo "Estimated turns: $ESTIMATED → allocated: $MAX_TURNS"
           fi
 
           # --- Timeout estimation ---

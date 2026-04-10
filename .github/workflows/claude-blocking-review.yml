@@ -189,7 +189,7 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        timeout-minutes: ${{ steps.estimate.outputs.timeout_minutes }}
+        timeout-minutes: ${{ fromJSON(steps.estimate.outputs.timeout_minutes) }}
         continue-on-error: true  # infrastructure failure must not block merges
         uses: anthropics/claude-code-action@v1
         with:

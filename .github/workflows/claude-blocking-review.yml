@@ -5,7 +5,7 @@ name: Claude Blocking Review
 #
 # By default, review parameters are auto-estimated from the PR diff size:
 #   - Model: haiku for ≤500-line diffs, sonnet for larger diffs
-#   - max_turns: scaled from diff size with 20% buffer (min 6, max 50)
+#   - max_turns: scaled from diff size with 20% buffer (min 6–8 by model, max 50)
 #   - timeout: scaled from max_turns (min 4m, max 30m)
 # Callers can override any parameter explicitly.
 #
@@ -148,18 +148,24 @@ jobs:
           fi
 
           # --- Turn estimation ---
-          # Base: 4 turns (read diff, review, post comment, write verdict)
-          # +1 turn per ~150 lines of diff (file reads, reasoning)
-          # +20% buffer, minimum 6
+          # Haiku uses more turns per unit of work than Sonnet, so scale accordingly.
+          # Sonnet: base 4, +1 per 150 lines. Haiku: base 6, +1 per 100 lines.
+          # +20% buffer on top, minimum 8 (haiku) or 6 (sonnet).
           if [ "$MAX_TURNS_INPUT" -gt 0 ]; then
             MAX_TURNS="$MAX_TURNS_INPUT"
             echo "max_turns override: $MAX_TURNS"
           else
-            ESTIMATED=$((4 + DIFF_LINES / 150))
+            if echo "$MODEL" | grep -q "haiku"; then
+              ESTIMATED=$((6 + DIFF_LINES / 100))
+              MIN_TURNS=8
+            else
+              ESTIMATED=$((4 + DIFF_LINES / 150))
+              MIN_TURNS=6
+            fi
             MAX_TURNS=$(( (ESTIMATED * 120 + 99) / 100 ))
-            if [ "$MAX_TURNS" -lt 6 ]; then MAX_TURNS=6; fi
+            if [ "$MAX_TURNS" -lt "$MIN_TURNS" ]; then MAX_TURNS="$MIN_TURNS"; fi
             if [ "$MAX_TURNS" -gt 50 ]; then MAX_TURNS=50; fi
-            echo "Estimated turns: $ESTIMATED → with 20% buffer: $MAX_TURNS"
+            echo "Estimated turns: $ESTIMATED → with 20% buffer: $MAX_TURNS (min $MIN_TURNS)"
           fi
 
           # --- Timeout estimation ---

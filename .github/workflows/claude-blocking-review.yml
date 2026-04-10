@@ -5,7 +5,7 @@ name: Claude Blocking Review
 #
 # By default, review parameters are auto-estimated from the PR diff size:
 #   - Model: sonnet (callers can override)
-#   - max_turns: 6 + lines/150, +20% buffer (min 8, max 50)
+#   - max_turns: 10 + lines/150, +20% buffer (min 12, max 50)
 #   - timeout: scaled from max_turns (min 4m, max 30m)
 # Callers can override any parameter explicitly.
 #
@@ -145,16 +145,17 @@ jobs:
           fi
 
           # --- Turn estimation ---
-          # A review has fixed overhead (~7 tool calls: read diff, read files,
-          # reason, write review, append verdict, post comment, write verdict file).
-          # Base 6, +1 per 150 lines, min 8, +20% buffer.
+          # A review has significant fixed overhead: read diff, read each changed
+          # file for context, reason about findings, write review to file, append
+          # verdict, post PR comment, write verdict file. Even a small diff needs
+          # ~10 turns. Base 10, +1 per 150 lines, min 12, +20% buffer.
           if [ "$MAX_TURNS_INPUT" -gt 0 ]; then
             MAX_TURNS="$MAX_TURNS_INPUT"
             echo "max_turns override: $MAX_TURNS"
           else
-            ESTIMATED=$((6 + DIFF_LINES / 150))
+            ESTIMATED=$((10 + DIFF_LINES / 150))
             MAX_TURNS=$(( (ESTIMATED * 120 + 99) / 100 ))
-            if [ "$MAX_TURNS" -lt 8 ]; then MAX_TURNS=8; fi
+            if [ "$MAX_TURNS" -lt 12 ]; then MAX_TURNS=12; fi
             if [ "$MAX_TURNS" -gt 50 ]; then MAX_TURNS=50; fi
             echo "Estimated turns: $ESTIMATED → with 20% buffer: $MAX_TURNS"
           fi

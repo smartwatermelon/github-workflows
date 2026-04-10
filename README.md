@@ -24,6 +24,33 @@ Regression BLOCKs require a **line-level code path trace** — Claude must ident
 the specific file, line, and execution path that causes the failure. Assertions about
 test failures without traceable evidence default to PASS.
 
+### Auto-sizing
+
+Review parameters are estimated automatically from the PR diff size:
+
+| Parameter | Logic | Range |
+|-----------|-------|-------|
+| **Model** | Haiku for ≤500-line diffs, Sonnet for larger | `claude-haiku-4-5` / `claude-sonnet-4-6` |
+| **Max turns** | `4 + diff_lines/150`, +20% buffer | 6–50 |
+| **Timeout** | `turns × 30s × 1.2` | 4–30 minutes |
+
+Callers can override any parameter:
+
+```yaml
+with:
+  pr_number: ${{ github.event.pull_request.number }}
+  model: claude-sonnet-4-6   # force sonnet for all diffs
+  max_turns: 30               # override turn estimate
+  timeout_minutes: 15          # override timeout estimate
+```
+
+Pass `0` for `max_turns` or `timeout_minutes` to use auto-estimation (the default).
+Pass `auto` for `model` to use auto-selection (the default).
+
+If the review runs out of turns or times out before rendering a verdict, the
+check **fails** (INCOMPLETE) instead of silently passing. Use the escape hatch
+below to bypass if needed.
+
 ### Escape hatch
 
 Add `[skip-claude-review: reason]` to the PR body to bypass enforcement.

@@ -291,7 +291,7 @@ jobs:
             The verdict file (Step 4) is the primary signal read by CI. The verdict line
             appended to the comment (Step 2) is the fallback. Both must match.
 
-          claude_args: '--max-turns ${{ steps.estimate.outputs.max_turns }} --model ${{ steps.estimate.outputs.model }} --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *)"'
+          claude_args: '--max-turns ${{ steps.estimate.outputs.max_turns }} --model ${{ steps.estimate.outputs.model }} --allowed-tools "Read,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *),Bash(printf *)"'
 
       - name: Check review verdict
         if: always()

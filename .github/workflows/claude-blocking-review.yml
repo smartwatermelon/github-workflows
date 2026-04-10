@@ -40,15 +40,15 @@ on:
         required: false
         default: ''
       max_turns:
-        description: 'Maximum Claude API turns (prevents runaway exploration). Default: 6.'
+        description: 'Maximum Claude API turns (prevents runaway exploration). Default: 20.'
         type: number
         required: false
-        default: 6
+        default: 20
       timeout_minutes:
-        description: 'Hard timeout for the Claude review step in minutes. Default: 4.'
+        description: 'Hard timeout for the Claude review step in minutes. Default: 10.'
         type: number
         required: false
-        default: 4
+        default: 10
       model:
         description: 'Claude model ID. Default: claude-sonnet-4-6.'
         type: string

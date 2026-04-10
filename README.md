@@ -31,7 +31,7 @@ Review parameters are estimated automatically from the PR diff size:
 | Parameter | Logic | Range |
 |-----------|-------|-------|
 | **Model** | Haiku for ≤500-line diffs, Sonnet for larger | `claude-haiku-4-5` / `claude-sonnet-4-6` |
-| **Max turns** | Sonnet: `4 + lines/150`; Haiku: `6 + lines/100`, +20% buffer | 6–50 (min 8 for Haiku) |
+| **Max turns** | Sonnet: `6 + lines/150`; Haiku: `10 + lines/80`, +20% buffer | 8–50 (min 12 for Haiku) |
 | **Timeout** | `turns × 30s × 1.2` | 4–30 minutes |
 
 Callers can override any parameter:

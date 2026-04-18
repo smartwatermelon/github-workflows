@@ -1,0 +1,38 @@
+name: Self-Review
+
+# Self-applying caller: runs this repo's reusable Claude Blocking Review
+# workflow on its own PRs. Produces the `claude-review / run-review` status
+# check that branch protection requires on main.
+#
+# Uses a local path (./.github/workflows/claude-blocking-review.yml) rather
+# than a tag, so PR branches dogfood the proposed changes to the reusable
+# workflow against themselves before release.
+#
+# Replaces the .github/workflows/claude-code-review.yml caller that was
+# deleted in commit 52e688b during the v1 rename.
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  claude-review:
+    uses: ./.github/workflows/claude-blocking-review.yml
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      extra_instructions: |
+        This repository hosts the reusable `claude-blocking-review.yml`
+        workflow itself. Pay particular attention to:
+        - Shell-injection risk in any step that interpolates PR data
+        - Changes to the verdict file / comment parsing contract that
+          consumer repos depend on
+        - Changes to allowed-tools that could broaden what Claude can run
+        - Grep/regex changes in the escape-hatch path (see #38 history)
+    secrets:
+      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

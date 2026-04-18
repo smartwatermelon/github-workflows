@@ -427,7 +427,7 @@ jobs:
             content (which already ends with the VERDICT line from Step 2).
             Run these three commands verbatim — do NOT omit or edit the marker:
 
-              printf '<!-- claude-blocking-review sha=%s run=%s -->\n\n' '${{ github.event.pull_request.head.sha }}' '${{ github.run_id }}' > /tmp/review-final.md
+              printf '<!-- claude-blocking-review sha=%s run=%s -->\n\n' '${{ github.event.pull_request.head.sha || github.sha }}' '${{ github.run_id }}' > /tmp/review-final.md
               cat /tmp/review.md >> /tmp/review-final.md
               gh pr comment ${{ inputs.pr_number }} --body-file /tmp/review-final.md
 

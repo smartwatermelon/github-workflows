@@ -138,7 +138,16 @@ jobs:
           # security, data-loss) don't apply to prose changes. Skips saves real
           # money per run and eliminates the "3 flakes in a row on a doc-only
           # PR" pattern observed in the 2026-04-17 AAR (kebab-tax#1162).
-          FILES=$(gh pr diff "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" --name-only 2>/dev/null || echo "")
+          #
+          # Use the files API (not `gh pr diff --name-only`) so we get the
+          # pre-rename path for renamed files. A rename like src/foo.py →
+          # docs/foo.md would otherwise only show docs/foo.md (apparent
+          # doc-only) while the diff contains full code deletion. We classify
+          # the UNION of both paths: the PR is doc-only iff every
+          # previous_filename AND every filename matches the allowlist below.
+          FILES=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate \
+            --jq '.[] | [.previous_filename, .filename] | .[] | select(. != null)' \
+            2>/dev/null | sort -u || echo "")
           if [ -z "$FILES" ]; then
             echo "::warning::Could not determine changed files — proceeding with review."
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -150,15 +159,32 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              *.md|*.markdown|*.rst|*.txt) ;;
+              # Explicit NON-DOC exclusions come FIRST — they'd otherwise match
+              # the general *.md / *.yml patterns below. These files look meta
+              # but have real security impact and must not skip review:
+              #   - PULL_REQUEST_TEMPLATE.md: can embed required security
+              #     checklists; removing them should not bypass review.
+              #   - CODEOWNERS: controls approval authority on code paths.
+              #   - dependabot.yml: controls dependency sourcing.
+              .github/PULL_REQUEST_TEMPLATE.md|.github/CODEOWNERS|.github/dependabot.yml)
+                ALL_DOCS=false; NON_DOC="$f"; break ;;
+              # Prose documentation formats. `*.txt` was INTENTIONALLY removed
+              # — it matched dependency manifests like requirements.txt,
+              # constraints.txt, packages.txt that are code-adjacent and
+              # deserve review when they change.
+              *.md|*.markdown|*.rst) ;;
               LICENSE|LICENSE.*|COPYING|COPYING.*) ;;
               CHANGELOG|CHANGELOG.*|HISTORY|HISTORY.*|AUTHORS|NOTICE) ;;
+              # Build-time meta files with negligible runtime behavior impact.
               .gitignore|.gitattributes|.editorconfig|.mailmap) ;;
-              .github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md) ;;
-              # FUNDING.yml is display-only; CODEOWNERS (approval authority)
-              # and dependabot.yml (dependency sourcing) are intentionally
-              # EXCLUDED — they look meta but have real security impact.
+              # Image assets (usually README screenshots, docs figures).
+              *.png|*.jpg|*.jpeg|*.gif|*.svg|*.webp|*.ico|*.bmp) ;;
+              # User-facing issue forms and the Sponsor button config.
+              .github/ISSUE_TEMPLATE/*) ;;
               .github/FUNDING.yml) ;;
+              # Doc directories at the repo root. Nested doc/ under code paths
+              # (e.g. src/docs/) intentionally NOT covered — if a consumer has
+              # nested docs they still get reviewed, conservative.
               docs/*|doc/*) ;;
               *) ALL_DOCS=false; NON_DOC="$f"; break ;;
             esac
@@ -293,7 +319,7 @@ jobs:
             [ -z "$id" ] && continue
             if gh api graphql \
                  -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' \
-                 -F id="$id" >/dev/null 2>&1; then
+                 -f id="$id" >/dev/null 2>&1; then
               COUNT=$((COUNT + 1))
             else
               echo "::warning::Failed to minimize prior review comment $id"
@@ -401,7 +427,7 @@ jobs:
             content (which already ends with the VERDICT line from Step 2).
             Run these three commands verbatim — do NOT omit or edit the marker:
 
-              printf '<!-- claude-blocking-review sha=%s run=%s -->\n\n' '${{ github.event.pull_request.head.sha }}' '${{ github.run_id }}' > /tmp/review-final.md
+              printf '<!-- claude-blocking-review sha=%s run=%s -->\n\n' '${{ github.event.pull_request.head.sha || github.sha }}' '${{ github.run_id }}' > /tmp/review-final.md
               cat /tmp/review.md >> /tmp/review-final.md
               gh pr comment ${{ inputs.pr_number }} --body-file /tmp/review-final.md
 

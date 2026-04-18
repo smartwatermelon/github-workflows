@@ -3,11 +3,15 @@ name: Claude Blocking Review
 # Reusable workflow: blocks PR merges when Claude finds bugs, reliability
 # regressions, security issues, or data-loss risks.
 #
-# By default, review parameters are auto-estimated from the PR diff size:
+# By default, review parameters are auto-estimated from the PR diff size.
+# The prompt is BLOCK-only (bug / reliability / security / async-error /
+# data-loss), not a full code review — local reviewers cover style, coverage,
+# and docs — so the estimation base is intentionally tight:
 #   - Model: sonnet (callers can override)
-#   - max_turns: 10 + lines/150, +20% buffer (min 25, max 50)
+#   - max_turns: 8 + lines/200, +20% buffer (min 15, max 40)
 #   - timeout: scaled from max_turns (min 4m, max 30m)
-# Callers can override any parameter explicitly.
+# Callers can override any parameter explicitly. Override range for
+# max_turns is 1-50; timeout_minutes is 1-30.
 #
 # Usage in a caller workflow:
 #

@@ -262,8 +262,12 @@ jobs:
           # Claude room to recover and finish. The AAR 2026-04-17 documented
           # three consecutive infra-flake timeouts in one session on
           # kebab-tax#1162 — extra slack is the right posture.
-          # Bounds: 4 min floor (very small diffs still need checkout +
-          # action setup + 15-turn minimum), 30 min ceiling.
+          # At current bounds (MAX_TURNS ∈ [15, 40]) the computed timeout is
+          # always 9–24 min, so the 4 min floor and 30 min ceiling are
+          # DEFENSIVE — they only activate if a future change lowers the
+          # MAX_TURNS floor below 8 or raises it above 50. The caller-side
+          # timeout_minutes validation in Validate inputs enforces a hard
+          # upper bound of 30 regardless of what the estimator computes.
           if [ "$TIMEOUT_INPUT" -gt 0 ]; then
             TIMEOUT="$TIMEOUT_INPUT"
             echo "timeout_minutes override: $TIMEOUT"

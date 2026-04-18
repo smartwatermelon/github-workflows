@@ -154,6 +154,28 @@ jobs:
             exit 0
           fi
 
+          # PRIORITY SKIP — workflow-self-modification.
+          # When a PR modifies ANY .github/workflows/*.yml file, the
+          # anthropics/claude-code-action refuses to run by design (its
+          # security feature: a PR that modifies the reviewer cannot have the
+          # reviewer run against itself). Without a skip here, the step fails
+          # with a misleading "exceeded turn limit" error after 30s. This
+          # case hits EVERY Dependabot-generated PR that bumps the pin, plus
+          # any manual caller-workflow edit. Short-circuit cleanly; a real
+          # review runs on the next non-workflow PR after merge.
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              .github/workflows/*.yml|.github/workflows/*.yaml)
+                echo "::notice::PR modifies .github/workflows/ ($f) — claude-code-action refuses to run by design. Skipping; real review will run on the next non-workflow PR after merge."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+                echo "**Verdict:** SKIPPED (workflow-self-modification)" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+                ;;
+            esac
+          done <<< "$FILES"
+
           ALL_DOCS=true
           NON_DOC=""
           while IFS= read -r f; do

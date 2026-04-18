@@ -374,7 +374,10 @@ jobs:
 
             When uncertain between BLOCK and PASS, default to PASS.
 
-            You MUST complete ALL of the following steps in order:
+            You MUST complete ALL of the following steps in order. The verdict
+            file is written BEFORE the comment post so that if you run out of
+            turns or time during the comment post, CI still has a usable
+            verdict. Do not reorder these steps.
 
             Step 1 — Write your review to /tmp/review.md
 
@@ -384,7 +387,12 @@ jobs:
               # OR (if blocking issues found):
               echo "VERDICT: BLOCK" >> /tmp/review.md
 
-            Step 3 — Post the review as a PR comment. The body MUST begin with a
+            Step 3 — Write the verdict to the verdict file (PRIMARY signal for CI):
+              echo "VERDICT: PASS" > /tmp/review-verdict.txt
+              # OR:
+              echo "VERDICT: BLOCK" > /tmp/review-verdict.txt
+
+            Step 4 — Post the review as a PR comment. The body MUST begin with a
             machine-readable marker line, then a blank line, then the review
             content (which already ends with the VERDICT line from Step 2).
             Run these three commands verbatim — do NOT omit or edit the marker:
@@ -398,13 +406,9 @@ jobs:
             reviews produced by this workflow and associate each one with
             its reviewed commit. Omitting it breaks those consumers.
 
-            Step 4 — Write the verdict to the verdict file:
-              echo "VERDICT: PASS" > /tmp/review-verdict.txt
-              # OR:
-              echo "VERDICT: BLOCK" > /tmp/review-verdict.txt
-
-            The verdict file (Step 4) is the primary signal read by CI. The verdict line
-            appended to the comment (Step 2) is the fallback. Both must match.
+            The verdict file (Step 3) is the primary signal read by CI. The
+            VERDICT line inside the posted comment (Step 2 / Step 4) is the
+            fallback. Both must match.
 
           claude_args: '--max-turns ${{ steps.estimate.outputs.max_turns }} --model ${{ steps.estimate.outputs.model }} --allowed-tools "Read,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *),Bash(printf *)"'
 
@@ -444,12 +448,17 @@ jobs:
           else
             # Fallback: Claude sometimes includes the verdict in the comment body
             # instead of writing a separate file. Parse the most recent PR comment.
+            # Anchor the grep to line start/end — the prompt instructs Claude to
+            # emit the VERDICT line as the terminal line of the comment. An
+            # unanchored match will hit any "VERDICT: BLOCK" or "VERDICT: PASS"
+            # string in the review prose (e.g., when the review discusses the
+            # verdict contract itself, as PR #47's self-review demonstrated).
             echo "::warning::Verdict file not found — falling back to PR comment parsing."
             COMMENT=$(gh pr view "$PR_NUMBER" --json comments -q '.comments[-1].body' 2>/dev/null || echo "")
-            if echo "$COMMENT" | grep -q "VERDICT: BLOCK"; then
+            if echo "$COMMENT" | grep -qE '^VERDICT: BLOCK$'; then
               VERDICT="VERDICT: BLOCK"
               echo "Verdict source: PR comment (fallback)"
-            elif echo "$COMMENT" | grep -q "VERDICT: PASS"; then
+            elif echo "$COMMENT" | grep -qE '^VERDICT: PASS$'; then
               VERDICT="VERDICT: PASS"
               echo "Verdict source: PR comment (fallback)"
             else

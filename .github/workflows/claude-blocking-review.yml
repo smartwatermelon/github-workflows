@@ -293,7 +293,7 @@ jobs:
             [ -z "$id" ] && continue
             if gh api graphql \
                  -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' \
-                 -F id="$id" >/dev/null 2>&1; then
+                 -f id="$id" >/dev/null 2>&1; then
               COUNT=$((COUNT + 1))
             else
               echo "::warning::Failed to minimize prior review comment $id"

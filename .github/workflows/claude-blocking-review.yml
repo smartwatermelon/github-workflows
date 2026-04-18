@@ -194,24 +194,27 @@ jobs:
           fi
 
           # --- Turn estimation ---
-          # The fixed overhead of a review is high and varies by repo:
-          #   - Read diff (1+ turns)
-          #   - Read CLAUDE.md for conventions (repos can have 400+ line files)
-          #   - Read each changed file for context (1+ turns per file)
-          #   - Reason about findings
-          #   - Write review, append verdict, post comment, write verdict file (3-4 turns)
-          # Plus extra_instructions add repo-specific review scope.
-          # Minimum 25 turns covers this overhead generously — unused turns are
-          # free, only wall-clock time costs money, and the timeout is the real
-          # cost guard. Scale up for large diffs.
+          # The prompt is now BLOCK-only (bug / reliability / security /
+          # data-loss / async-error criteria) — no style, no coverage, no
+          # CLAUDE.md read, no per-file reads for organizational context.
+          # Fixed overhead is therefore lower than the wide-prompt era:
+          #   - Read diff (1-2 turns)
+          #   - Scan for hazards, reason about findings (2-4 turns)
+          #   - Write review, append verdict (2 turns)
+          #   - Write verdict file, post comment (4 turns — 3-command post)
+          # ≈8-12 turns for a typical small diff. Floor of 15 keeps a
+          # comfortable margin against the "exceeded turn limit" failure
+          # mode that drove the earlier 25 floor (see AAR 2026-04-17).
+          # Unused turns are free; only turns actually spent cost tokens,
+          # so the floor is a ceiling-above-overhead, not a target.
           if [ "$MAX_TURNS_INPUT" -gt 0 ]; then
             MAX_TURNS="$MAX_TURNS_INPUT"
             echo "max_turns override: $MAX_TURNS"
           else
-            ESTIMATED=$((10 + DIFF_LINES / 150))
+            ESTIMATED=$((8 + DIFF_LINES / 200))
             MAX_TURNS=$(( (ESTIMATED * 120 + 99) / 100 ))
-            if [ "$MAX_TURNS" -lt 25 ]; then MAX_TURNS=25; fi
-            if [ "$MAX_TURNS" -gt 50 ]; then MAX_TURNS=50; fi
+            if [ "$MAX_TURNS" -lt 15 ]; then MAX_TURNS=15; fi
+            if [ "$MAX_TURNS" -gt 40 ]; then MAX_TURNS=40; fi
             echo "Estimated turns: $ESTIMATED → allocated: $MAX_TURNS"
           fi
 
@@ -306,52 +309,49 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ inputs.pr_number }}
 
+            You are a BLOCK/PASS gate, not a full code reviewer. Local
+            reviewers (pre-commit hooks, code-reviewer, adversarial-reviewer,
+            linters, test suites) already cover style, naming, organization,
+            test coverage, and documentation. Do NOT duplicate that work —
+            it costs money and dilutes the signal of a real BLOCK.
+
             SCOPE CONSTRAINTS — follow these strictly:
-            - Read the PR diff using `gh pr diff`
-            - Read changed files for immediate context around modified lines
-            - Do NOT explore the broader codebase, run tests, or investigate unrelated files
-            - Focus your review on the diff — do not review unchanged code
-            - Complete your review in as few steps as possible
+            - Read the PR diff with `gh pr diff`
+            - Read a changed file ONLY when you need execution-path context
+              to confirm a specific BLOCK hypothesis — never for "general
+              context" or style check
+            - Do NOT read CLAUDE.md, README, or any doc — they describe
+              style and conventions, which are not in scope
+            - Do NOT explore the broader codebase, run tests, or investigate
+              unrelated files
+            - Complete your review in as few turns as possible
 
-            Please review this pull request and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or logic errors
-            - Reliability regressions (something that used to work may now break)
-            - Security concerns
-            - Test coverage for changed behavior
+            Check the diff for these BLOCK criteria ONLY:
+            - A clear bug that causes incorrect behavior in production
+              (wrong calculation, incorrect condition, off-by-one affecting
+              real data)
+            - A reliability regression: a previously working feature or
+              pipeline path may now fail because of changes in this PR
+            - A security vulnerability: hardcoded credentials, unvalidated
+              user input reaching a privileged operation, or an auth check
+              that can be bypassed
+            - Missing error handling on an async operation that would cause
+              a silent failure or a raw exception surfaced to the user
+            - A risk of data loss or data corruption
 
-            Use the repository's CLAUDE.md for guidance on style and conventions.
-            Be constructive and specific — cite file names and line numbers where possible.
-            When listing non-blocking observations, order them by maintenance impact:
-            issues that will predictably cause test drift or duplicated bugs should
-            appear before stylistic or organizational notes.
+            If you find none of the above → VERDICT: PASS. Keep the review
+            body short (≤5 lines is fine). Do NOT list style, naming,
+            organization, or coverage observations — the local reviewers
+            already caught or passed on those. Non-blocking observations
+            here are noise that dilutes the PASS/BLOCK signal.
+
+            If you find a BLOCK → cite file:line for each concern and
+            explain the failure mode in one or two sentences. Evidence
+            standard below is non-negotiable for reliability regressions.
 
             ${{ inputs.extra_instructions != '' && format('---\n\nAdditional instructions for this repository:\n\n{0}', inputs.extra_instructions) || '' }}
 
             ---
-
-            VERDICT INSTRUCTIONS — follow these exactly:
-
-            Determine your verdict based on the review findings:
-
-            Use VERDICT: BLOCK if ANY of the following are true:
-            - You found a clear bug that causes incorrect behavior in production (wrong
-              calculation, incorrect condition, off-by-one that affects real data)
-            - You found a reliability regression: a previously working feature or pipeline
-              path may now fail because of changes in this PR
-            - You found a security vulnerability: hardcoded credentials, unvalidated user
-              input reaching a privileged operation, or an auth check that can be bypassed
-            - You found missing error handling on an async operation that would cause a
-              silent failure or surface a raw exception to the user
-            - You found a risk of data loss or data corruption
-
-            Use VERDICT: PASS in all other cases, including:
-            - Style and naming issues
-            - Test coverage gaps that do not affect existing behavior
-            - Performance concerns without measurable impact
-            - Documentation gaps
-            - Code organization suggestions
-            - Informational warnings
 
             EVIDENCE STANDARD FOR RELIABILITY REGRESSION BLOCKs:
 

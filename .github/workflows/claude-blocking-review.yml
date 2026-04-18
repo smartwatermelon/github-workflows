@@ -150,15 +150,32 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              *.md|*.markdown|*.rst|*.txt) ;;
+              # Explicit NON-DOC exclusions come FIRST — they'd otherwise match
+              # the general *.md / *.yml patterns below. These files look meta
+              # but have real security impact and must not skip review:
+              #   - PULL_REQUEST_TEMPLATE.md: can embed required security
+              #     checklists; removing them should not bypass review.
+              #   - CODEOWNERS: controls approval authority on code paths.
+              #   - dependabot.yml: controls dependency sourcing.
+              .github/PULL_REQUEST_TEMPLATE.md|.github/CODEOWNERS|.github/dependabot.yml)
+                ALL_DOCS=false; NON_DOC="$f"; break ;;
+              # Prose documentation formats. `*.txt` was INTENTIONALLY removed
+              # — it matched dependency manifests like requirements.txt,
+              # constraints.txt, packages.txt that are code-adjacent and
+              # deserve review when they change.
+              *.md|*.markdown|*.rst) ;;
               LICENSE|LICENSE.*|COPYING|COPYING.*) ;;
               CHANGELOG|CHANGELOG.*|HISTORY|HISTORY.*|AUTHORS|NOTICE) ;;
+              # Build-time meta files with negligible runtime behavior impact.
               .gitignore|.gitattributes|.editorconfig|.mailmap) ;;
-              .github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md) ;;
-              # FUNDING.yml is display-only; CODEOWNERS (approval authority)
-              # and dependabot.yml (dependency sourcing) are intentionally
-              # EXCLUDED — they look meta but have real security impact.
+              # Image assets (usually README screenshots, docs figures).
+              *.png|*.jpg|*.jpeg|*.gif|*.svg|*.webp|*.ico|*.bmp) ;;
+              # User-facing issue forms and the Sponsor button config.
+              .github/ISSUE_TEMPLATE/*) ;;
               .github/FUNDING.yml) ;;
+              # Doc directories at the repo root. Nested doc/ under code paths
+              # (e.g. src/docs/) intentionally NOT covered — if a consumer has
+              # nested docs they still get reviewed, conservative.
               docs/*|doc/*) ;;
               *) ALL_DOCS=false; NON_DOC="$f"; break ;;
             esac

@@ -300,10 +300,13 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           CLAUDE_OUTCOME: ${{ steps.claude-review.outcome }}
         run: |
-          # Escape hatch: [skip-claude-review: reason] in PR body bypasses enforcement
+          # Escape hatch: [skip-claude-review] or [skip-claude-review: reason] in PR body
+          # bypasses enforcement. The extended regex matches both the bare token and the
+          # documented `: reason` form advertised by our error messages. See issue #38
+          # for the prior -F fixed-string pattern that only matched the bare form.
           PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")
-          if echo "$PR_BODY" | grep -qF '[skip-claude-review]'; then
-            echo "::notice::Claude Code Review enforcement skipped via [skip-claude-review] in PR body."
+          if echo "$PR_BODY" | grep -qE '\[skip-claude-review(\]|:)'; then
+            echo "::notice::Claude Code Review enforcement skipped via [skip-claude-review] marker in PR body."
             echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
             echo "**Verdict:** SKIPPED (override in PR body)" >> "$GITHUB_STEP_SUMMARY"
             exit 0

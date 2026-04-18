@@ -123,8 +123,54 @@ jobs:
             exit 1
           fi
 
+      - name: Check for doc-only diff
+        id: doc-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          # Short-circuit: diffs that only touch docs/meta files don't need a
+          # paid Claude review — the BLOCK criteria (bug, reliability regression,
+          # security, data-loss) don't apply to prose changes. Skips saves real
+          # money per run and eliminates the "3 flakes in a row on a doc-only
+          # PR" pattern observed in the 2026-04-17 AAR (kebab-tax#1162).
+          FILES=$(gh pr diff "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" --name-only 2>/dev/null || echo "")
+          if [ -z "$FILES" ]; then
+            echo "::warning::Could not determine changed files — proceeding with review."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ALL_DOCS=true
+          NON_DOC=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              *.md|*.markdown|*.rst|*.txt) ;;
+              LICENSE|LICENSE.*|COPYING|COPYING.*) ;;
+              CHANGELOG|CHANGELOG.*|HISTORY|HISTORY.*|AUTHORS|NOTICE) ;;
+              .gitignore|.gitattributes|.editorconfig|.mailmap) ;;
+              .github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md) ;;
+              .github/CODEOWNERS|.github/FUNDING.yml|.github/dependabot.yml) ;;
+              docs/*|doc/*) ;;
+              *) ALL_DOCS=false; NON_DOC="$f"; break ;;
+            esac
+          done <<< "$FILES"
+
+          if [ "$ALL_DOCS" = "true" ]; then
+            FILE_COUNT=$(printf '%s\n' "$FILES" | grep -c .)
+            echo "::notice::Doc-only diff (${FILE_COUNT} file(s)) — skipping Claude review."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Verdict:** SKIPPED (doc-only diff, ${FILE_COUNT} file(s))" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Non-doc file present ('$NON_DOC') — proceeding with review."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Estimate review parameters
         id: estimate
+        if: steps.doc-check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -191,8 +237,56 @@ jobs:
           echo "| Max turns | $MAX_TURNS |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Timeout | ${TIMEOUT}m |" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Minimize prior review comments
+        if: steps.doc-check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          # Collapse prior review comments tagged with the claude-blocking-review
+          # marker. Keeps the PR conversation readable across multiple review
+          # iterations (the AAR observed 4 stale reviews on kebab-tax#1165
+          # polluting both the human-facing timeline and the post-push status
+          # scraper). Non-fatal: any failure here must not block the review.
+          OWNER="${REPO%/*}"
+          NAME="${REPO#*/}"
+
+          PRIOR_IDS=$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  comments(first: 100) {
+                    nodes { id body isMinimized }
+                  }
+                }
+              }
+            }' \
+            -F owner="$OWNER" -F name="$NAME" -F number="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest.comments.nodes[] | select(.isMinimized == false) | select(.body | startswith("<!-- claude-blocking-review")) | .id' \
+            2>/dev/null || echo "")
+
+          if [ -z "$PRIOR_IDS" ]; then
+            echo "No prior marked review comments to minimize."
+            exit 0
+          fi
+
+          COUNT=0
+          while IFS= read -r id; do
+            [ -z "$id" ] && continue
+            if gh api graphql \
+                 -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' \
+                 -F id="$id" >/dev/null 2>&1; then
+              COUNT=$((COUNT + 1))
+            else
+              echo "::warning::Failed to minimize prior review comment $id"
+            fi
+          done <<< "$PRIOR_IDS"
+          echo "Minimized $COUNT prior review comment(s) as OUTDATED."
+
       - name: Run Claude Code Review
         id: claude-review
+        if: steps.doc-check.outputs.skip != 'true'
         timeout-minutes: ${{ fromJSON(steps.estimate.outputs.timeout_minutes) }}
         continue-on-error: true  # infrastructure failure must not block merges
         uses: anthropics/claude-code-action@v1
@@ -280,8 +374,19 @@ jobs:
               # OR (if blocking issues found):
               echo "VERDICT: BLOCK" >> /tmp/review.md
 
-            Step 3 — Post the review as a PR comment (the verdict line will be at the end):
-              gh pr comment ${{ inputs.pr_number }} --body "$(cat /tmp/review.md)"
+            Step 3 — Post the review as a PR comment. The body MUST begin with a
+            machine-readable marker line, then a blank line, then the review
+            content (which already ends with the VERDICT line from Step 2).
+            Run these three commands verbatim — do NOT omit or edit the marker:
+
+              printf '<!-- claude-blocking-review sha=%s run=%s -->\n\n' '${{ github.event.pull_request.head.sha }}' '${{ github.run_id }}' > /tmp/review-final.md
+              cat /tmp/review.md >> /tmp/review-final.md
+              gh pr comment ${{ inputs.pr_number }} --body-file /tmp/review-final.md
+
+            The marker lets downstream tooling (status scrapers, the
+            "Minimize prior review comments" step on the next run) identify
+            reviews produced by this workflow and associate each one with
+            its reviewed commit. Omitting it breaks those consumers.
 
             Step 4 — Write the verdict to the verdict file:
               echo "VERDICT: PASS" > /tmp/review-verdict.txt
@@ -299,7 +404,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           CLAUDE_OUTCOME: ${{ steps.claude-review.outcome }}
+          DOC_SKIP: ${{ steps.doc-check.outputs.skip }}
         run: |
+          # Short-circuit: doc-only diff already wrote its summary in the
+          # Check for doc-only diff step. Nothing to verify, nothing to block.
+          if [ "$DOC_SKIP" = "true" ]; then
+            echo "Doc-only skip — no verdict required."
+            exit 0
+          fi
+
           # Escape hatch: [skip-claude-review] or [skip-claude-review: reason] in PR body
           # bypasses enforcement. The extended regex matches both the bare token and the
           # documented `: reason` form advertised by our error messages. See issue #38

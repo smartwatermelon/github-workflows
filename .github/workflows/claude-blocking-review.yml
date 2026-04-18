@@ -255,17 +255,24 @@ jobs:
           OWNER="${REPO%/*}"
           NAME="${REPO#*/}"
 
+          # `last: 100` (newest comments first) rather than `first:` (oldest)
+          # so markers from recent review iterations are always inside the
+          # window even on noisy PRs. Filter to our marker AND un-minimized
+          # to keep this idempotent across repeated runs.
+          # Use -f (explicit string) for owner/name — -F auto-detects types,
+          # and a repo name that happens to parse as an integer would fail
+          # the String! schema check.
           PRIOR_IDS=$(gh api graphql \
             -f query='query($owner: String!, $name: String!, $number: Int!) {
               repository(owner: $owner, name: $name) {
                 pullRequest(number: $number) {
-                  comments(first: 100) {
+                  comments(last: 100) {
                     nodes { id body isMinimized }
                   }
                 }
               }
             }' \
-            -F owner="$OWNER" -F name="$NAME" -F number="$PR_NUMBER" \
+            -f owner="$OWNER" -f name="$NAME" -F number="$PR_NUMBER" \
             --jq '.data.repository.pullRequest.comments.nodes[] | select(.isMinimized == false) | select(.body | startswith("<!-- claude-blocking-review")) | .id' \
             2>/dev/null || echo "")
 

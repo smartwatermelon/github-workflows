@@ -70,6 +70,43 @@ updates:
 
 After this, new versions of the source repo auto-PR themselves to consumers within a week. No more manual batch migrations.
 
+### Phase 5 — Auto-merge Dependabot PRs (optional but strongly recommended)
+
+Enabling Dependabot without auto-merge produces a backlog problem: the first fleet-wide scan revealed 100+ pending dependency updates that had accumulated over months. Manually merging each is painful.
+
+Solution: a narrow-scope auto-merge workflow in every consumer that fires **only** for Dependabot PRs, **only** for patch + minor bumps (majors still require manual review).
+
+Two steps per repo:
+
+- **5a — Enable `allow_auto_merge: true`** via `PATCH /repos/{owner}/{repo}`. Idempotent.
+- **5b — Install `.github/workflows/dependabot-auto-merge.yml`** via Contents API:
+
+```yaml
+name: Dependabot Auto-Merge
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dependabot/fetch-metadata@v2
+        id: metadata
+      - if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash --delete-branch "$PR_URL"
+```
+
+Safety: `pull_request_target` runs the base-branch version of the workflow (PR can't bypass itself); `github.actor` is set by GitHub (not spoofable); the `update-type` check bounds the blast radius to patch + minor.
+
 ## Pitfalls encountered
 
 | Pitfall | How we found it | How we handled it |
@@ -80,6 +117,8 @@ After this, new versions of the source repo auto-PR themselves to consumers with
 | `claude-code-action` refuses to run when caller workflow changes | Phase 1 bellwethers failed with "exceeded turn limit" after 30s | Phase 4a ships a skip for the specific failure mode |
 | Unanchored `VERDICT: X` grep false-matches review prose | PR #47 self-review's text quoted the grep pattern | Anchor to line start/end in the Check verdict step |
 | Content-adjacent config files in "doc-only" allowlist | Local reviewer flagged CODEOWNERS, dependabot.yml | Explicit NON-DOC exclusion for security-adjacent meta files |
+| `allow_auto_merge: true` silently rejected on some repos | Phase 5 PATCH returned 200 OK but the field stayed `false` | **Private + GitHub Free tier repos can't enable auto-merge.** Only paid (Pro/Team) or public repos accept the setting. Either upgrade the repo, make it public, or skip auto-merge there. User enables manually via UI (Settings → General → Pull Requests) as workaround. |
+| Enabling Dependabot exposes backlog | Fleet-wide Dependabot turn-on produced 100+ PRs on day 1 | Expected — it's catching months of drift. Bulk-enable `--auto` on the backlog (`gh pr merge --auto` in a loop) or merge through them manually. Subsequent weeks stay quiet. |
 
 ## Timings observed
 
@@ -90,6 +129,7 @@ After this, new versions of the source repo auto-PR themselves to consumers with
 | Phase 2 (23 repo batch) | 23 admin direct-pushes | 30 seconds |
 | Phase 3 (4 renames) | 8 API calls (create + delete per repo) | 15 seconds |
 | Phase 4 (27 pins + 27 dependabot.yml) | 54 admin direct-pushes | 45 seconds |
+| Phase 5 (27 auto-merge workflows + 27 PATCH calls) | 54 API calls | 30 seconds |
 
 The PR-flow phases dominate. The admin batch phases are nearly free.
 

@@ -249,7 +249,21 @@ jobs:
           fi
 
           # --- Timeout estimation ---
-          # ~30s per turn as baseline, +20% buffer, minimum 4 minutes
+          # ~30s per turn as baseline, with a second 20% buffer on top of the
+          # max_turns value (which already carries its own 20% buffer from the
+          # turn estimation above). Compounded factor = 1.20 × 1.20 = 1.44 —
+          # so the timeout is ~44% over the raw `turns × 30s` baseline.
+          # This is INTENTIONAL: a max_turns exhaustion is what Claude hits
+          # when its budget runs out mid-run (produces "exceeded turn limit");
+          # a wall-clock timeout is the outer safety net for infrastructure
+          # flakes (network stalls, backend pressure) that don't consume turns
+          # but still eat wall-clock. Keeping slack on the wall-clock side
+          # means flakes that would otherwise kill the step instead give
+          # Claude room to recover and finish. The AAR 2026-04-17 documented
+          # three consecutive infra-flake timeouts in one session on
+          # kebab-tax#1162 — extra slack is the right posture.
+          # Bounds: 4 min floor (very small diffs still need checkout +
+          # action setup + 15-turn minimum), 30 min ceiling.
           if [ "$TIMEOUT_INPUT" -gt 0 ]; then
             TIMEOUT="$TIMEOUT_INPUT"
             echo "timeout_minutes override: $TIMEOUT"

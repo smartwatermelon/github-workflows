@@ -374,6 +374,12 @@ jobs:
         continue-on-error: true  # infrastructure failure must not block merges
         uses: anthropics/claude-code-action@v1
         with:
+          # claude-code-action rejects non-User actors unless explicitly allowed.
+          # Callers use this on pull_request events that fire for bot-opened PRs
+          # (dependabot) and synchronize events triggered by bot pushes (claude,
+          # github-actions). Named list only — see docs/security.md in the action
+          # repo for why `*` is discouraged.
+          allowed_bots: "claude[bot],github-actions[bot],dependabot[bot]"
           claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
           prompt: |
             REPO: ${{ github.repository }}

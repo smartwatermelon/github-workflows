@@ -3,15 +3,21 @@ name: Claude Blocking Review
 # Reusable workflow: blocks PR merges when Claude finds bugs, reliability
 # regressions, security issues, or data-loss risks.
 #
-# By default, review parameters are auto-estimated from the PR diff size.
-# The prompt is BLOCK-only (bug / reliability / security / async-error /
-# data-loss), not a full code review — local reviewers cover style, coverage,
-# and docs — so the estimation base is intentionally tight:
-#   - Model: sonnet (callers can override)
-#   - max_turns: 8 + lines/200, +20% buffer (min 15, max 40)
-#   - timeout: scaled from max_turns (min 4m, max 30m)
-# Callers can override any parameter explicitly. Override range for
-# max_turns is 1-50; timeout_minutes is 1-30.
+# v3 (2026-04-28): drops the `--max-turns` cap on the Claude agent — it
+# was force-killing reviews mid-run on small/medium diffs because the
+# estimator's floor (15 turns) was tighter than reality. Reviews are now
+# bounded only by the wall-clock `timeout-minutes` (the hard safety net),
+# the prompt's own scope discipline, and the OAuth subscription quota.
+# This trades a predictable artificial cap for a more permissive natural
+# bound; the previous "Review did not complete (likely exceeded turn
+# limit)" failure mode is gone. Subscription billing means unused turns
+# are free — generous wall-clock is the right posture.
+#
+# By default, review parameters are auto-estimated from the PR diff size:
+#   - Model: claude-sonnet-4-6 (callers can override)
+#   - timeout: 10 + lines/100 minutes (min 10, max 30)
+# Callers can override `model` and `timeout_minutes` explicitly. Override
+# range for timeout_minutes is 1-30. Removed in v3: the `max_turns` input.
 #
 # Usage in a caller workflow:
 #
@@ -23,7 +29,7 @@ name: Claude Blocking Review
 #
 #   jobs:
 #     claude-review:
-#       uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v1
+#       uses: smartwatermelon/github-workflows/.github/workflows/claude-blocking-review.yml@v3
 #       with:
 #         pr_number: ${{ github.event.pull_request.number }}
 #         extra_instructions: |
@@ -33,6 +39,9 @@ name: Claude Blocking Review
 #
 # The calling job name ("claude-review" above) becomes the required status
 # check name: "Claude Blocking Review / claude-review / run-review" in branch protection.
+#
+# Migration from v2: remove any `max_turns:` input from caller workflows.
+# Workflow validation will fail until the input is removed.
 #
 # Escape hatch: add [skip-claude-review: reason] to the PR body to bypass
 # enforcement with an audit trail.
@@ -49,13 +58,11 @@ on:
         type: string
         required: false
         default: ''
-      max_turns:
-        description: 'Maximum Claude API turns. 0 = auto-estimate from diff size. Callers can override.'
-        type: number
-        required: false
-        default: 0
       timeout_minutes:
-        description: 'Hard timeout for the Claude review step in minutes. 0 = auto-estimate from diff size.'
+        description: |
+          Hard timeout for the Claude review step in minutes (max 30).
+          0 = auto-estimate from diff size. Since v3 dropped the
+          --max-turns cap, this is the only hard safety net.
         type: number
         required: false
         default: 0
@@ -100,21 +107,11 @@ jobs:
       - name: Validate inputs
         env:
           MODEL: ${{ inputs.model }}
-          MAX_TURNS: ${{ inputs.max_turns }}
           TIMEOUT: ${{ inputs.timeout_minutes }}
         run: |
           # Validate model: "auto" or alphanumeric/dots/hyphens
           if [ "$MODEL" != "auto" ] && ! echo "$MODEL" | grep -qE '^[a-zA-Z0-9._-]+$'; then
             echo "::error::Invalid model name. Must be 'auto' or match [a-zA-Z0-9._-]+"
-            exit 1
-          fi
-          # Validate max_turns: 0 (auto) or 1-50
-          if ! echo "$MAX_TURNS" | grep -qE '^[0-9]+$'; then
-            echo "::error::max_turns must be a non-negative integer"
-            exit 1
-          fi
-          if [ "$MAX_TURNS" -gt 50 ]; then
-            echo "::error::max_turns must be between 0 and 50 (0 = auto)"
             exit 1
           fi
           # Validate timeout_minutes: 0 (auto) or 1-30
@@ -230,7 +227,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           MODEL_INPUT: ${{ inputs.model }}
-          MAX_TURNS_INPUT: ${{ inputs.max_turns }}
           TIMEOUT_INPUT: ${{ inputs.timeout_minutes }}
         run: |
           DIFF_LINES=$(gh pr diff "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" | wc -l | tr -d ' ')
@@ -245,64 +241,35 @@ jobs:
             echo "Model: claude-sonnet-4-6"
           fi
 
-          # --- Turn estimation ---
-          # The prompt is now BLOCK-only (bug / reliability / security /
-          # data-loss / async-error criteria) — no style, no coverage, no
-          # CLAUDE.md read, no per-file reads for organizational context.
-          # Fixed overhead is therefore lower than the wide-prompt era:
-          #   - Read diff (1-2 turns)
-          #   - Scan for hazards, reason about findings (2-4 turns)
-          #   - Write review, append verdict (2 turns)
-          #   - Write verdict file, post comment (4 turns — 3-command post)
-          # ≈8-12 turns for a typical small diff. Floor of 15 keeps a
-          # comfortable margin against the "exceeded turn limit" failure
-          # mode that drove the earlier 25 floor (see AAR 2026-04-17).
-          # Unused turns are free; only turns actually spent cost tokens,
-          # so the floor is a ceiling-above-overhead, not a target.
-          if [ "$MAX_TURNS_INPUT" -gt 0 ]; then
-            MAX_TURNS="$MAX_TURNS_INPUT"
-            echo "max_turns override: $MAX_TURNS"
-          else
-            ESTIMATED=$((8 + DIFF_LINES / 200))
-            MAX_TURNS=$(( (ESTIMATED * 120 + 99) / 100 ))
-            if [ "$MAX_TURNS" -lt 15 ]; then MAX_TURNS=15; fi
-            if [ "$MAX_TURNS" -gt 40 ]; then MAX_TURNS=40; fi
-            echo "Estimated turns: $ESTIMATED → allocated: $MAX_TURNS"
-          fi
-
-          # --- Timeout estimation ---
-          # ~30s per turn as baseline, with a second 20% buffer on top of the
-          # max_turns value (which already carries its own 20% buffer from the
-          # turn estimation above). Compounded factor = 1.20 × 1.20 = 1.44 —
-          # so the timeout is ~44% over the raw `turns × 30s` baseline.
-          # This is INTENTIONAL: a max_turns exhaustion is what Claude hits
-          # when its budget runs out mid-run (produces "exceeded turn limit");
-          # a wall-clock timeout is the outer safety net for infrastructure
-          # flakes (network stalls, backend pressure) that don't consume turns
-          # but still eat wall-clock. Keeping slack on the wall-clock side
-          # means flakes that would otherwise kill the step instead give
-          # Claude room to recover and finish. The AAR 2026-04-17 documented
-          # three consecutive infra-flake timeouts in one session on
-          # kebab-tax#1162 — extra slack is the right posture.
-          # At current bounds (MAX_TURNS ∈ [15, 40]) the computed timeout is
-          # always 9–24 min, so the 4 min floor and 30 min ceiling are
-          # DEFENSIVE — they only activate if a future change lowers the
-          # MAX_TURNS floor below 8 or raises it above 50. The caller-side
-          # timeout_minutes validation in Validate inputs enforces a hard
-          # upper bound of 30 regardless of what the estimator computes.
+          # --- Timeout estimation (v3) ---
+          # The wall-clock `timeout-minutes` is the only hard safety net
+          # since v3 dropped the --max-turns cap. The previous formula
+          # derived timeout from max_turns × 30s × 1.44 buffer; with no
+          # turn cap, we compute timeout directly from diff size:
+          #
+          #   TIMEOUT = max(10, 10 + lines/100)  capped at 30
+          #
+          # Floor raised from 4 → 10 min because the wall-clock is now
+          # the SOLE mechanism that bounds a runaway / confused agent.
+          # Subscription billing means an oversized timeout is free if
+          # the agent finishes early; only actual elapsed time matters.
+          # Generous is the right posture.
+          #
+          # Sample sizing:
+          #   100-line diff   → 11 min
+          #   1,000-line diff → 20 min
+          #   2,000-line diff → 30 min (cap)
           if [ "$TIMEOUT_INPUT" -gt 0 ]; then
             TIMEOUT="$TIMEOUT_INPUT"
             echo "timeout_minutes override: $TIMEOUT"
           else
-            TIMEOUT_SECS=$(( MAX_TURNS * 30 * 120 / 100 ))
-            TIMEOUT=$(( (TIMEOUT_SECS + 59) / 60 ))
-            if [ "$TIMEOUT" -lt 4 ]; then TIMEOUT=4; fi
+            TIMEOUT=$(( 10 + DIFF_LINES / 100 ))
+            if [ "$TIMEOUT" -lt 10 ]; then TIMEOUT=10; fi
             if [ "$TIMEOUT" -gt 30 ]; then TIMEOUT=30; fi
-            echo "Estimated timeout: ${TIMEOUT}m"
+            echo "Estimated timeout: ${TIMEOUT}m (from ${DIFF_LINES} diff lines)"
           fi
 
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-          echo "max_turns=$MAX_TURNS" >> "$GITHUB_OUTPUT"
           echo "timeout_minutes=$TIMEOUT" >> "$GITHUB_OUTPUT"
 
           echo "### Review Parameters" >> "$GITHUB_STEP_SUMMARY"
@@ -310,7 +277,6 @@ jobs:
           echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Diff lines | $DIFF_LINES |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Model | $MODEL |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Max turns | $MAX_TURNS |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Timeout | ${TIMEOUT}m |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Minimize prior review comments
@@ -391,16 +357,29 @@ jobs:
             test coverage, and documentation. Do NOT duplicate that work —
             it costs money and dilutes the signal of a real BLOCK.
 
-            SCOPE CONSTRAINTS — follow these strictly:
-            - Read the PR diff with `gh pr diff`
+            SCOPE CONSTRAINTS — follow these strictly. v3 dropped the
+            artificial --max-turns cap, so YOU are the soft constraint
+            keeping the review efficient. The wall-clock timeout is the
+            only hard backstop, and burning it on exploration costs
+            real subscription quota for no signal.
+
+            - Read the PR diff with `gh pr diff` — that's your primary input
             - Read a changed file ONLY when you need execution-path context
               to confirm a specific BLOCK hypothesis — never for "general
-              context" or style check
+              context", style check, or to prove a hunch you can already
+              answer from the diff alone
+            - Hard ceiling: if confirming a single hypothesis would require
+              reading more than 3 files, stop and either downgrade to PASS
+              with a named observation or BLOCK based on the evidence you
+              already have. Do not chase a fourth file.
             - Do NOT read CLAUDE.md, README, or any doc — they describe
               style and conventions, which are not in scope
             - Do NOT explore the broader codebase, run tests, or investigate
               unrelated files
-            - Complete your review in as few turns as possible
+            - Complete your review in as few turns as possible. A tight
+              PASS is a successful review; a thorough BLOCK is a successful
+              review; a meandering exploration that runs out of wall-clock
+              is a wasted review.
 
             Check the diff for these BLOCK criteria ONLY:
             - A clear bug that causes incorrect behavior in production
@@ -486,7 +465,7 @@ jobs:
             VERDICT line inside the posted comment (Step 2 / Step 4) is the
             fallback. Both must match.
 
-          claude_args: '--max-turns ${{ steps.estimate.outputs.max_turns }} --model ${{ steps.estimate.outputs.model }} --allowed-tools "Read,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *),Bash(printf *)"'
+          claude_args: '--model ${{ steps.estimate.outputs.model }} --allowed-tools "Read,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *),Bash(printf *)"'
 
       - name: Check review verdict
         if: always()

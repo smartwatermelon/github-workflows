@@ -154,12 +154,13 @@ jobs:
           # PRIORITY SKIP — workflow-self-modification.
           # When a PR modifies ANY .github/workflows/*.yml file, the
           # anthropics/claude-code-action refuses to run by design (its
-          # security feature: a PR that modifies the reviewer cannot have the
-          # reviewer run against itself). Without a skip here, the step fails
-          # with a misleading "exceeded turn limit" error after 30s. This
-          # case hits EVERY Dependabot-generated PR that bumps the pin, plus
-          # any manual caller-workflow edit. Short-circuit cleanly; a real
-          # review runs on the next non-workflow PR after merge.
+          # security feature: a PR that modifies the reviewer cannot have
+          # the reviewer run against itself). Without a skip here, the step
+          # fails fast with a misleading "review did not complete" error.
+          # This case hits EVERY Dependabot-generated PR that bumps the
+          # pin, plus any manual caller-workflow edit. Short-circuit
+          # cleanly; a real review runs on the next non-workflow PR after
+          # merge.
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
@@ -517,12 +518,13 @@ jobs:
               VERDICT="VERDICT: PASS"
               echo "Verdict source: PR comment (fallback)"
             else
-              # No verdict found — distinguish exhaustion from infrastructure failure
+              # No verdict found — distinguish a real Claude-side failure
+              # (timeout, agent error) from an infrastructure flake.
               if [ "$CLAUDE_OUTCOME" = "failure" ]; then
-                echo "::error::Review did not complete (likely exceeded turn limit or timed out). No verdict rendered."
+                echo "::error::Review did not complete (likely timed out or failed to render verdict). No verdict rendered."
                 echo "::error::Re-push to retry, or add [skip-claude-review: reason] to the PR body to bypass."
                 echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
-                echo "**Verdict:** INCOMPLETE — review exceeded turn limit or timed out." >> "$GITHUB_STEP_SUMMARY"
+                echo "**Verdict:** INCOMPLETE — review timed out or failed to render verdict." >> "$GITHUB_STEP_SUMMARY"
                 echo "Re-push to retry or add \`[skip-claude-review: reason]\` to bypass." >> "$GITHUB_STEP_SUMMARY"
                 exit 1
               else

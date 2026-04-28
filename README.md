@@ -28,32 +28,41 @@ test failures without traceable evidence default to PASS.
 
 Review parameters are estimated automatically from the PR diff size. The
 reviewer prompt is BLOCK-only (bug / reliability regression / security /
-async-error / data-loss), not a full code review, so the turn budget is
-intentionally tight — local reviewers are expected to cover style, test
-coverage, and documentation concerns:
+async-error / data-loss), not a full code review — local reviewers are
+expected to cover style, test coverage, and documentation concerns. v3
+removed the `--max-turns` cap; reviews are now bounded only by the
+wall-clock timeout, the prompt's scope discipline, and the OAuth
+subscription quota.
 
 | Parameter | Logic | Range |
 |-----------|-------|-------|
 | **Model** | Sonnet (callers can override) | `claude-sonnet-4-6` |
-| **Max turns** | `8 + lines/200`, +20% buffer | 15–40 |
-| **Timeout** | `turns × 30s × 1.2` | 4–30 minutes |
+| **Timeout** | `10 + lines/100` minutes | 10–30 minutes |
 
 Callers can override any parameter:
 
 ```yaml
 with:
   pr_number: ${{ github.event.pull_request.number }}
-  model: claude-sonnet-4-6   # force sonnet for all diffs
-  max_turns: 30               # override turn estimate
+  model: claude-sonnet-4-6     # force sonnet for all diffs
   timeout_minutes: 15          # override timeout estimate
 ```
 
-Pass `0` for `max_turns` or `timeout_minutes` to use auto-estimation (the default).
+Pass `0` for `timeout_minutes` to use auto-estimation (the default).
 Pass `auto` for `model` to use auto-selection (the default).
 
-If the review runs out of turns or times out before rendering a verdict, the
-check **fails** (INCOMPLETE) instead of silently passing. Use the escape hatch
-below to bypass if needed.
+**v3 (2026-04-28):** the `max_turns` input was removed and the
+`--max-turns` flag is no longer passed to the Claude agent. Reviews are
+now bounded only by the wall-clock `timeout_minutes` (the hard safety
+net), the prompt's own scope discipline, and the OAuth subscription
+quota. The previous "Review did not complete (likely exceeded turn
+limit)" failure mode is gone. **Caller migration:** remove `max_turns:`
+from your caller workflow when bumping to `@v3`; it will fail
+workflow validation if left in place.
+
+If the review times out before rendering a verdict, the check **fails**
+(INCOMPLETE) instead of silently passing. Use the escape hatch below to
+bypass if needed.
 
 ### Escape hatch
 
@@ -82,7 +91,7 @@ on:
 
 jobs:
   claude-review:
-    uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v1
+    uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3
     with:
       pr_number: ${{ github.event.pull_request.number }}
       # extra_instructions: |
@@ -116,10 +125,9 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 
 | Tag | Meaning |
 |-----|---------|
-| `@v1` | Current stable major version (floating — gets minor updates) |
-| `@v1.2.0` | Latest pinned release |
-| `@v1.1.0` | Previous pinned release |
-| `@v1.0.0` | Initial release |
+| `@v3` | Current stable major version (floating — gets minor updates). v3 dropped the `max_turns` input; remove it from caller workflows when bumping. |
+| `@v2` | Previous stable major (still supported for callers that haven't migrated; passes `--max-turns` to the agent and accepts `max_turns:` input) |
+| `@v1` | Initial release line |
 | `@main` | Latest (may include breaking changes) |
 
 ---

@@ -28,15 +28,16 @@ test failures without traceable evidence default to PASS.
 
 Review parameters are estimated automatically from the PR diff size. The
 reviewer prompt is BLOCK-only (bug / reliability regression / security /
-async-error / data-loss), not a full code review, so the turn budget is
-intentionally tight — local reviewers are expected to cover style, test
-coverage, and documentation concerns:
+async-error / data-loss), not a full code review — local reviewers are
+expected to cover style, test coverage, and documentation concerns. v3
+removed the `--max-turns` cap; reviews are now bounded only by the
+wall-clock timeout, the prompt's scope discipline, and the OAuth
+subscription quota.
 
 | Parameter | Logic | Range |
 |-----------|-------|-------|
 | **Model** | Sonnet (callers can override) | `claude-sonnet-4-6` |
-| **Max turns** | `8 + lines/200`, +20% buffer | 15–40 |
-| **Timeout** | `turns × 30s × 1.2` | 4–30 minutes |
+| **Timeout** | `10 + lines/100` minutes | 10–30 minutes |
 
 Callers can override any parameter:
 

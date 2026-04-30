@@ -20,8 +20,8 @@ This addresses the "new repos automatically inherit" half of the original questi
 ## Preconditions
 
 - Org admin access to `nightowlstudiollc`.
-- `CLAUDE_CODE_OAUTH_TOKEN` already provisioned at the org level, OR plan to add it during this rollout. Check before starting: `gh secret list --org nightowlstudiollc`.
-- The `smartwatermelon/.github` template fix (PR currently open at `smartwatermelon/.github#7`) merged. The mirror should land at `@v3.0.0`, not stale `@v2.0.1`.
+- `CLAUDE_CODE_OAUTH_TOKEN` is provisioned **per-repo** by Claude Code CLI's `/install-github-app`. There is no org-level installation scope. Andrew's working baseline is that every repo he owns already has the App installed; a missing secret on a specific repo is a remediation gap to flag, not an org-level config item. `claude-review-audit.sh` reports which repos lack the secret.
+- The `smartwatermelon/.github` template fix (PR `smartwatermelon/.github#7`) merged. The mirror should land at `@v3.0.0`, not stale `@v2.0.1`.
 
 ## Phases
 
@@ -76,13 +76,14 @@ Copy from `smartwatermelon/.github`:
 
 Skip `.github/FUNDING.yml` unless decided otherwise in Phase 0.
 
-### Phase 3 — Provision org-level secret
+### Phase 3 — Verify the GitHub App is installed on target repos
 
-```bash
-gh secret set CLAUDE_CODE_OAUTH_TOKEN --org nightowlstudiollc --visibility all
-```
+`CLAUDE_CODE_OAUTH_TOKEN` is provisioned per-repo by Claude Code CLI's `/install-github-app` slash command. There is no `--org` flag and no org-level installation. Two cases:
 
-Without this, every workflow scaffolded from the template will fail on first run. Check `gh secret list --org nightowlstudiollc` before declaring done.
+- **Every existing nightowl repo:** Andrew's working baseline is that the App is already installed everywhere. Confirm with `claude-review-audit.sh` — any nightowl repo lacking the secret is a one-off gap to fix by running `/install-github-app` from a Claude Code CLI session in that repo.
+- **The newly-bootstrapped `nightowlstudiollc/.github` repo itself:** the App did not auto-install, since the repo was created in this session. Run `/install-github-app` against it specifically before the `claude.yml` (`@claude` mention handler) inside it can fire.
+
+When a repo later scaffolds the Claude Blocking Review template via the picker, the workflow only runs cleanly if `/install-github-app` has already been run against that repo. The `.github` repo's existence does not propagate the secret to consumers — it just makes the picker stub available.
 
 ### Phase 4 — Bellwether
 
@@ -105,7 +106,7 @@ If the template doesn't show up in the picker: check that the `.github` repo is 
 
 | Risk | Mitigation |
 |---|---|
-| Template appears in picker but secret missing → first run fails | Phase 3 explicit; verify with `gh secret list --org nightowlstudiollc` |
+| Template appears in picker but secret missing on the consuming repo → first run fails | Phase 3 explicit; `claude-review-audit.sh` is the per-repo check. Remediate with `/install-github-app` on the repo. |
 | Free-tier features (auto-merge, branch protection rules) silently no-op on the `.github` repo if it lands on the wrong tier | NightOwl is on `team` plan per `gh api orgs/nightowlstudiollc`; no concern. Cross-check anyway |
 | `profile/README.md` placeholder gets indexed before real content lands | Land Phase 2 commits in one PR or one direct push, not piecemeal |
 | Existing nightowl repos with bespoke claude-review configs collide with the new template at install time | The template only affects *new* installs. Existing repos are bulk-install territory and untouched by this plan |

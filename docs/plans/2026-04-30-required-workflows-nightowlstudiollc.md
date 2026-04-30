@@ -44,7 +44,7 @@ Recommend **Audit-only first**, then **Moderate**, escalating to **Strong** only
 
   Recommend **A** until smartwatermelon goes private or NightOwl needs divergent thresholds.
 
-- `CLAUDE_CODE_OAUTH_TOKEN` provisioned at org level (Phase 3 of the defaults plan).
+- `CLAUDE_CODE_OAUTH_TOKEN` present on every repo in the ruleset's scope (per-repo via `/install-github-app` — there is no org-level scope). The defaults plan's Phase 3 verifies this fleet-wide.
 - Org admin permission to create rulesets (`admin:org` scope on `gh` token; check with `gh auth status`).
 - Decision recorded: which gate strength tier to start at.
 

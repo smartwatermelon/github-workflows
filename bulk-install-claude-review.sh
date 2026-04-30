@@ -56,6 +56,10 @@ while [[ "$#" -gt 0 ]]; do
     --only)
       shift
       ONLY="${1:-}"
+      if [[ -z "${ONLY}" || "${ONLY}" == --* ]]; then
+        printf "Error: --only requires a non-empty owner/repo argument\n" >&2
+        exit 2
+      fi
       ;;
     --verbose) VERBOSE=true ;;
     -h | --help)
@@ -102,7 +106,7 @@ if [[ -z "${CANONICAL_CONTENT}" ]]; then
 fi
 
 TARGET_VERSION="$(echo "${CANONICAL_CONTENT}" \
-  | grep -m1 -oE 'claude-blocking-review\.yml@[^[:space:]]+' \
+  | grep -m1 -oE 'claude-blocking-review\.yml@[A-Za-z0-9._/-]+' \
   | sed 's/^.*@//')"
 
 if [[ -z "${TARGET_VERSION}" ]]; then
@@ -127,9 +131,11 @@ uses_blocking_review() {
   strip_comments "${1}" | grep -q "claude-blocking-review\.yml"
 }
 
-# Extract the @version pin from a workflow file (first match in non-comment lines)
+# Extract the @version pin from a workflow file (first match in non-comment lines).
+# Restricted to characters valid in git refs/SHAs to avoid capturing trailing
+# punctuation (commas, quotes) from YAML.
 extract_pin() {
-  strip_comments "${1}" | grep -m1 -oE 'claude-blocking-review\.yml@[^[:space:]]+' \
+  strip_comments "${1}" | grep -m1 -oE 'claude-blocking-review\.yml@[A-Za-z0-9._/-]+' \
     | sed 's/^.*@//'
 }
 
@@ -299,9 +305,26 @@ process_repo() {
   local current_content
   current_content="$(fetch_file "${full}" "${file_path}")"
 
+  if [[ -z "${current_content}" ]]; then
+    warn "ERROR — could not fetch ${file_path} (transient gh API failure?)"
+    REPOS_ERROR+=("${full}")
+    return
+  fi
+
   if uses_local_path "${current_content}"; then
     ok "LOCAL — caller uses a local path reference (no remote pin to bump)"
     REPOS_LOCAL+=("${full}")
+    return
+  fi
+
+  # Check customization BEFORE pin comparison: any caller-side customization
+  # is reason to skip automated bumping, even if the pin is stale. The sed
+  # that bumps a stale pin is safe by itself, but a customized caller may
+  # have intent we shouldn't second-guess (paths-ignore semantics, custom
+  # extra_instructions, etc.) — flag for human review instead.
+  if has_customization "${current_content}"; then
+    warn "CUSTOMIZED — caller has paths-ignore/extra_instructions/etc; skipping (human review)"
+    REPOS_CUSTOMIZED+=("${full}")
     return
   fi
 
@@ -315,13 +338,8 @@ process_repo() {
   fi
 
   if [[ "${current_pin}" == "${TARGET_VERSION}" ]]; then
-    if has_customization "${current_content}"; then
-      warn "CUSTOMIZED — on target (${current_pin}) but has caller-side customizations; skipping"
-      REPOS_CUSTOMIZED+=("${full}")
-    else
-      ok "CURRENT — already on ${TARGET_VERSION}"
-      REPOS_CURRENT+=("${full}")
-    fi
+    ok "CURRENT — already on ${TARGET_VERSION}"
+    REPOS_CURRENT+=("${full}")
     return
   fi
 
@@ -417,3 +435,10 @@ if ! ${APPLY} && [[ "${#REPOS_MISSING[@]}" -gt 0 || "${#REPOS_STALE[@]}" -gt 0 ]
 fi
 
 printf "\n══════════════════════════════════════════════════════════\n\n"
+
+# Surface ERROR class to callers (CI, cron, automation). Non-zero exit
+# ensures fetch failures don't go silent. CUSTOMIZED is intentionally
+# not an error — it's a human-review signal.
+if [[ "${#REPOS_ERROR[@]}" -gt 0 ]]; then
+  exit 1
+fi

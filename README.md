@@ -226,7 +226,7 @@ The script classifies each repo:
 | `CURRENT` | Already on the target version. No-op. |
 | `STALE` | Different pin or floating tag. Opens a PR bumping the pin. |
 | `MISSING` | No caller workflow at all. Opens a PR adding the canonical stub. |
-| `CUSTOMIZED` | Has caller-side modifications (`paths-ignore`, `extra_instructions`, etc.). Skipped — flag for human review. |
+| `CUSTOMIZED` | Has caller-side modifications (`paths-ignore`, `extra_instructions`, custom `model`/`timeout_minutes`, etc.). Skipped regardless of pin — flag for human review. |
 | `LOCAL` | Uses a local-path reference (`./...`). Not bumpable; e.g. the `github-workflows` repo's own self-review. |
 
 Target version is derived dynamically from the `@v…` pin in

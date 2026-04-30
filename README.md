@@ -201,3 +201,44 @@ Requires: `gh` CLI (authenticated), `jq`, `bash` 4.0+.
 
 Add repos to `.claude-review-ignore` (one `owner/repo` per line) to skip them
 in audits. Useful for repos that should never have the review installed.
+
+---
+
+## Bulk-install script (`smartwatermelon` only)
+
+`bulk-install-claude-review.sh` installs (or refreshes) the
+`claude-blocking-review` caller workflow across all non-archived repos under
+`smartwatermelon`. Workaround for the fact that GitHub's workflow-templates
+picker is **organization-only** — `smartwatermelon` is a user account, so
+the templates in `smartwatermelon/.github/workflow-templates/` never appear
+in the "New workflow" picker for `smartwatermelon/*` repos.
+
+```bash
+./bulk-install-claude-review.sh                          # dry-run (default)
+./bulk-install-claude-review.sh --apply                  # open PRs
+./bulk-install-claude-review.sh --only smartwatermelon/foo --apply
+```
+
+The script classifies each repo:
+
+| Class | Action |
+|-------|--------|
+| `CURRENT` | Already on the target version. No-op. |
+| `STALE` | Different pin or floating tag. Opens a PR bumping the pin. |
+| `MISSING` | No caller workflow at all. Opens a PR adding the canonical stub. |
+| `CUSTOMIZED` | Has caller-side modifications (`paths-ignore`, `extra_instructions`, etc.). Skipped — flag for human review. |
+| `LOCAL` | Uses a local-path reference (`./...`). Not bumpable; e.g. the `github-workflows` repo's own self-review. |
+
+Target version is derived dynamically from the `@v…` pin in
+`smartwatermelon/.github/workflow-templates/claude-blocking-review.yml`,
+so a PR bumping that template is the single trigger to roll a new version
+across the fleet.
+
+PRs include `[skip-claude-review: bulk-install]` in the body so the
+blocking-review workflow doesn't gate its own install/bump PR.
+
+For `nightowlstudiollc`, this script is intentionally not used — that org gets
+the workflow-templates picker for new repos, and (planned) Repository Rulesets
+for org-wide enforcement.
+
+Plan: `docs/plans/2026-04-30-bulk-install-smartwatermelon-fleet.md`.

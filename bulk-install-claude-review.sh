@@ -146,7 +146,7 @@ uses_local_path() {
 
 # Detect customization: caller has any of these non-trivial extras
 has_customization() {
-  echo "${1}" | grep -qE '^\s*(paths-ignore|paths|extra_instructions|model|timeout_minutes|env):' \
+  echo "${1}" | grep -qE '^[[:space:]]*(paths-ignore|paths|extra_instructions|model|timeout_minutes|env):' \
     || echo "${1}" | grep -q '\[skip-claude-review:'
 }
 

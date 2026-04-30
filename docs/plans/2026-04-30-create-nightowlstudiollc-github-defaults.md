@@ -126,3 +126,19 @@ Rollback: `gh repo delete nightowlstudiollc/.github` removes everything cleanly.
 - Should NightOwl have a different `extra_instructions` block in its template (e.g. domain-specific guidance for the LLC's product code)? Probably yes eventually — leave as comment placeholder, fill in once a NightOwl repo accumulates feedback patterns.
 - Public vs private profile decided in Phase 1.
 - Once this lands, do we want to split `claude-config`-style automation (an `install.sh` for `.github` repos)? Probably not — two orgs is the entire fleet; manual sync is fine.
+
+## Postscript — 2026-04-30 closeout
+
+Phases 1-3 and 5 complete. Phase 4 (bellwether picker test) effectively skipped:
+the picker template was confirmed to surface under "By Night Owl Studio" in two
+repos, but every active NightOwl repo already has `claude-blocking-review.yml`
+installed (blocking the picker commit with "file already exists"). The audit
+script verified all non-ignored NightOwl repos run `claude-review / run-review`
+green. The picker's remaining hypothetical value (validating end-to-end on a
+truly-fresh repo) is deferred until a new NightOwl repo is created.
+
+Decisions recorded:
+
+- Visibility: **public** (matches `smartwatermelon/.github` pattern; profile renders at <https://github.com/nightowlstudiollc>).
+- FUNDING.yml: **omitted** (LLC, no sponsor links).
+- `CLAUDE_CODE_OAUTH_TOKEN` installed on `nightowlstudiollc/.github` itself via `/install-github-app` (only repo-level gap surfaced by audit on the NightOwl side).

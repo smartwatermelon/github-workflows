@@ -206,9 +206,13 @@ open_install_pr() {
     return 1
   fi
 
-  # PUT file contents on the new branch
+  # PUT file contents on the new branch.
+  # `printf "%s\n"` re-adds the trailing newline that command substitution
+  # (the $() that captured CANONICAL_CONTENT / current_content earlier)
+  # strips from text files. Without this, every install/bump PR would
+  # produce a file failing yamllint's "no newline at end of file" rule.
   local b64_content
-  b64_content="$(printf "%s" "${file_content}" | base64 | tr -d '\n')"
+  b64_content="$(printf "%s\n" "${file_content}" | base64 | tr -d '\n')"
   local put_payload
   if [[ -n "${existing_sha}" ]]; then
     put_payload="$(jq -n \
@@ -292,7 +296,7 @@ process_repo() {
       local body
       body="$(pr_body_template "Install missing caller workflow")"
       open_install_pr "${full}" \
-        "claude/install-blocking-review" \
+        "claude/install-blocking-review-${TARGET_VERSION}" \
         "ci: install claude-blocking-review caller (${TARGET_VERSION})" \
         "ci: install claude-blocking-review caller (${TARGET_VERSION})" \
         "${body}" \

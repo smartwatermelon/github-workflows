@@ -105,7 +105,12 @@ if [[ -z "${CANONICAL_CONTENT}" ]]; then
   exit 3
 fi
 
-TARGET_VERSION="$(echo "${CANONICAL_CONTENT}" \
+# strip_comments before grep so a commented-out @version (e.g. an
+# example block) can't be picked up as the canonical pin. Same defense
+# extract_pin uses for consumer files.
+strip_comments() { echo "${1}" | grep -v '^[[:space:]]*#'; }
+
+TARGET_VERSION="$(strip_comments "${CANONICAL_CONTENT}" \
   | grep -m1 -oE 'claude-blocking-review\.yml@[A-Za-z0-9._/-]+' \
   | sed 's/^.*@//')"
 
@@ -125,7 +130,7 @@ declare -a REPOS_ERROR=()
 declare -a PR_URLS=()
 
 # ── helpers ─────────────────────────────────────────────────────────────────────
-strip_comments() { echo "${1}" | grep -v '^[[:space:]]*#'; }
+# strip_comments is defined earlier (before TARGET_VERSION extraction)
 
 uses_blocking_review() {
   strip_comments "${1}" | grep -q "claude-blocking-review\.yml"

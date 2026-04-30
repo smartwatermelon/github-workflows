@@ -238,7 +238,9 @@ PRs include `[skip-claude-review: bulk-install]` in the body so the
 blocking-review workflow doesn't gate its own install/bump PR.
 
 For `nightowlstudiollc`, this script is intentionally not used — that org gets
-the workflow-templates picker for new repos, and (planned) Repository Rulesets
-for org-wide enforcement.
+the workflow-templates picker via [`nightowlstudiollc/.github`](https://github.com/nightowlstudiollc/.github)
+(mirrors `smartwatermelon/.github` workflow-templates; verified appearing under
+"By Night Owl Studio" in the Actions → New workflow UI), and (planned)
+Repository Rulesets for org-wide enforcement.
 
 Plan: `docs/plans/2026-04-30-bulk-install-smartwatermelon-fleet.md`.

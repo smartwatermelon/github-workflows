@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# ============================================================================
+# !!! BROKEN — DO NOT RUN AS-IS — Non-executable on disk by design.        !!!
+# ============================================================================
+#
+# This script was used during the 2026-04-30 ruleset rollout attempt and has
+# a known correctness bug: step 1 unconditionally sets enforcement="active"
+# on every --apply re-run. During recovery we'd intentionally disabled the
+# ruleset to admin-merge stuck PRs, and a re-run silently re-armed it,
+# re-blocking merges fleet-wide. See the 2026-04-30 postscript at the bottom
+# of docs/plans/2026-04-30-required-workflows-nightowlstudiollc.md for the
+# full story.
+#
+# Before re-using this for a future rollout, fix step 1 to make state
+# assertions conditional on current state (don't re-arm a disabled ruleset),
+# and address the architectural failure modes documented in the plan
+# postscript. Then `chmod +x` to re-enable.
+#
+# ============================================================================
+# Phase 4 + 5 rollout from docs/plans/2026-04-30-required-workflows-nightowlstudiollc.md
+#
+# Three modes:
+#   (none)           dry-run — list candidate repos and current ruleset state
+#   --apply          execute step 1 (rename + active enforcement) and step 2
+#                    (open cleanup PRs with auto-merge). Does NOT expand scope.
+#   --expand-scope   execute step 3 only (set ruleset.repository_name to ~ALL).
+#                    Run after all cleanup PRs from --apply have merged.
+#
+# This split prevents step 3 from running on a half-converged fleet, which
+# would force every NightOwl PR through the org-level ruleset workflow even
+# while many repos still have their per-repo caller (= forced double-runs).
+#
+# Requires: gh CLI authenticated with admin:org scope on nightowlstudiollc.
+# Requires: jq.
+
+set -euo pipefail
+
+ORG="nightowlstudiollc"
+RULESET_OLD_NAME="Claude blocking review (eval)"
+RULESET_NEW_NAME="Claude blocking review"
+CLEANUP_BRANCH="chore/remove-per-repo-claude-review"
+IGNORE_FILE="/Volumes/extra-vieille/Workspaces/github-workflows/.claude-review-ignore"
+
+MODE="dry-run"
+case "${1:-}" in
+  --apply)        MODE="apply" ;;
+  --expand-scope) MODE="expand-scope" ;;
+  "")             MODE="dry-run" ;;
+  *) echo "ERROR: unknown arg '${1}'. Valid: --apply, --expand-scope (or no arg = dry-run)"; exit 2 ;;
+esac
+echo "=== mode: ${MODE} ==="
+
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+if ! gh auth status 2>&1 | grep -q "admin:org"; then
+  echo "ERROR: gh token lacks admin:org. Run: gh auth refresh -h github.com -s admin:org"
+  exit 1
+fi
+command -v jq >/dev/null || { echo "ERROR: jq not installed"; exit 1; }
+
+# Locate the ruleset by old or new name
+RULESET_ID=$(gh api "orgs/${ORG}/rulesets" \
+  --jq ".[] | select(.name == \"${RULESET_OLD_NAME}\" or .name == \"${RULESET_NEW_NAME}\") | .id")
+if [[ -z "$RULESET_ID" ]]; then
+  echo "ERROR: no ruleset named \"${RULESET_OLD_NAME}\" or \"${RULESET_NEW_NAME}\" in ${ORG}"
+  exit 1
+fi
+echo "ruleset id: ${RULESET_ID}"
+CURRENT_NAME=$(gh api "orgs/${ORG}/rulesets/${RULESET_ID}" --jq '.name')
+CURRENT_ENFORCEMENT=$(gh api "orgs/${ORG}/rulesets/${RULESET_ID}" --jq '.enforcement')
+CURRENT_SCOPE=$(gh api "orgs/${ORG}/rulesets/${RULESET_ID}" --jq '.conditions.repository_name.include | join(",")')
+echo "  current: name=\"${CURRENT_NAME}\", enforcement=${CURRENT_ENFORCEMENT}, scope=${CURRENT_SCOPE:-(unset)}"
+
+# ---------------------------------------------------------------------------
+# Helper: GET-modify-PUT the ruleset, preserving fields we don't touch.
+# Strips read-only fields PUT rejects. Argument is a jq filter applied to GET.
+# ---------------------------------------------------------------------------
+update_ruleset() {
+  local jq_filter="$1"
+  local current modified payload
+  current=$(gh api "orgs/${ORG}/rulesets/${RULESET_ID}")
+  modified=$(jq "${jq_filter}" <<<"$current")
+  # Strip read-only fields (cause "Validation Failed" on PUT)
+  payload=$(jq 'del(.id, .source, .source_type, ._links, .created_at, .updated_at, .current_user_can_bypass, .node_id)' <<<"$modified")
+  gh api -X PUT "orgs/${ORG}/rulesets/${RULESET_ID}" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    --input - <<<"$payload" >/dev/null
+  local new_name new_enf new_scope
+  new_name=$(gh api "orgs/${ORG}/rulesets/${RULESET_ID}" --jq '.name')
+  new_enf=$(gh api "orgs/${ORG}/rulesets/${RULESET_ID}" --jq '.enforcement')
+  new_scope=$(gh api "orgs/${ORG}/rulesets/${RULESET_ID}" --jq '.conditions.repository_name.include | join(",")')
+  echo "  updated: name=\"${new_name}\", enforcement=${new_enf}, scope=${new_scope}"
+}
+
+# ---------------------------------------------------------------------------
+# Mode: --expand-scope (step 3 only)
+# ---------------------------------------------------------------------------
+if [[ "$MODE" == "expand-scope" ]]; then
+  echo
+  echo "[step 3] expanding ruleset.conditions.repository_name to ~ALL"
+  update_ruleset '.conditions.repository_name = {"include":["~ALL"],"exclude":[],"protected":true}'
+  echo
+  echo "Done. Every active NightOwl repo's default branch is now gated by the ruleset."
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2 scan: find repos with per-repo Claude review caller files
+# ---------------------------------------------------------------------------
+echo
+echo "[scan] looking for per-repo callers across active NightOwl repos"
+
+IGNORED=()
+if [[ -f "$IGNORE_FILE" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    IGNORED+=("$line")
+  done <"$IGNORE_FILE"
+fi
+is_ignored() {
+  local repo="$1"
+  for i in "${IGNORED[@]:-}"; do
+    [[ "$i" == "${ORG}/${repo}" ]] && return 0
+  done
+  return 1
+}
+
+REPO_LIST=$(gh repo list "$ORG" --limit 1000 --json name,isArchived,defaultBranchRef \
+  --jq '.[] | select(.isArchived | not) | "\(.name)\t\(.defaultBranchRef.name)"')
+if [[ -z "$REPO_LIST" ]]; then
+  echo "ERROR: gh repo list returned no repos for ${ORG}"
+  exit 1
+fi
+mapfile -t REPO_ROWS <<<"$REPO_LIST"
+# Defensive: if mapfile produced a single empty element, treat as empty.
+if [[ ${#REPO_ROWS[@]} -eq 1 && -z "${REPO_ROWS[0]}" ]]; then
+  REPO_ROWS=()
+fi
+
+CANDIDATES=()
+for row in "${REPO_ROWS[@]}"; do
+  repo="${row%%$'\t'*}"
+  default_branch="${row##*$'\t'}"
+  [[ "$repo" == ".github" ]] && continue
+  if is_ignored "$repo"; then
+    echo "  ${repo}: ignored (.claude-review-ignore)"
+    continue
+  fi
+
+  found=""
+  for candidate in "claude-blocking-review.yml" "claude-code-review.yml"; do
+    if gh api "repos/${ORG}/${repo}/contents/.github/workflows/${candidate}" --jq '.sha' >/dev/null 2>&1; then
+      found="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$found" ]]; then
+    echo "  ${repo}: no per-repo caller (skip)"
+    continue
+  fi
+  echo "  ${repo}: will remove .github/workflows/${found} (default branch: ${default_branch})"
+  CANDIDATES+=("${repo}|${found}|${default_branch}")
+done
+
+echo "  ${#CANDIDATES[@]} repo(s) need cleanup PRs"
+
+# ---------------------------------------------------------------------------
+# Mode: dry-run exit
+# ---------------------------------------------------------------------------
+if [[ "$MODE" == "dry-run" ]]; then
+  echo
+  echo "Dry run complete. Re-run with --apply to execute steps 1 + 2."
+  echo "After cleanup PRs are merged, run with --expand-scope for step 3."
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Step 1 (apply) — Rename + active enforcement; preserves bypass_actors and
+# everything else via GET-modify-PUT.
+# ---------------------------------------------------------------------------
+echo
+echo "[step 1 apply] rename + enforcement = active (preserving bypass_actors and scope)"
+update_ruleset ".name = \"${RULESET_NEW_NAME}\" | .enforcement = \"active\""
+
+# ---------------------------------------------------------------------------
+# Step 2 (apply) — Open cleanup PRs
+# ---------------------------------------------------------------------------
+echo
+echo "[step 2 apply] opening cleanup PRs (auto-merge enabled where possible)"
+OPENED_PRS=()
+EXISTING_PRS=()
+AUTO_MERGE_FAILED=()
+PR_CREATE_FAILED=()
+for entry in "${CANDIDATES[@]}"; do
+  IFS='|' read -r repo file default_branch <<<"$entry"
+
+  # Idempotency: if cleanup branch already exists, decide whether to skip or recover
+  if branch_sha=$(gh api "repos/${ORG}/${repo}/git/ref/heads/${CLEANUP_BRANCH}" --jq '.object.sha' 2>/dev/null); then
+    main_sha=$(gh api "repos/${ORG}/${repo}/git/ref/heads/${default_branch}" --jq '.object.sha')
+    existing_pr=$(gh pr list --repo "${ORG}/${repo}" --head "${CLEANUP_BRANCH}" --state all --json url --jq '.[0].url' 2>/dev/null || true)
+
+    if [[ -n "$existing_pr" ]]; then
+      echo "  ${repo}: cleanup branch + PR already exist: ${existing_pr}"
+      EXISTING_PRS+=("$existing_pr")
+      continue
+    fi
+
+    if [[ "$branch_sha" == "$main_sha" ]]; then
+      # Orphan: branch exists, no commits, no PR. Delete and recreate.
+      echo "  ${repo}: orphan cleanup branch (no commits, no PR) — deleting and retrying"
+      gh api -X DELETE "repos/${ORG}/${repo}/git/refs/heads/${CLEANUP_BRANCH}" >/dev/null 2>&1 || true
+      # Fall through to fresh creation below
+    else
+      # Branch has commits but no PR (e.g., commit succeeded but PR creation failed).
+      # Open a PR for it.
+      echo "  ${repo}: cleanup branch has commits but no PR — opening PR"
+      pr_body="Org-wide rollout cleanup. The Repository Ruleset \"${RULESET_NEW_NAME}\" on \`${ORG}\` runs the Claude blocking review via \`${ORG}/.github/.github/workflows/claude-required-review.yml\`, so per-repo callers produce duplicate runs.
+
+Removing this file makes the ruleset the sole driver. Sibling \`claude.yml\` (mention handler) is unrelated and stays.
+
+Plan: \`docs/plans/2026-04-30-required-workflows-nightowlstudiollc.md\` Phase 4 / 5."
+      if pr_url=$(gh pr create --repo "${ORG}/${repo}" --base "$default_branch" --head "$CLEANUP_BRANCH" \
+                  --title "chore: remove per-repo claude review caller" --body "$pr_body" 2>&1); then
+        OPENED_PRS+=("$pr_url")
+        echo "    opened: ${pr_url}"
+        if ! merge_err=$(command gh pr merge --auto --squash --delete-branch "$pr_url" 2>&1); then
+          [[ "$merge_err" =~ already ]] || { echo "    auto-merge FAILED: ${merge_err}"; AUTO_MERGE_FAILED+=("${pr_url}"); }
+        fi
+      else
+        echo "    gh pr create FAILED: ${pr_url}"
+        PR_CREATE_FAILED+=("${ORG}/${repo}")
+      fi
+      continue
+    fi
+  fi
+
+  head_sha=$(gh api "repos/${ORG}/${repo}/git/ref/heads/${default_branch}" --jq '.object.sha')
+  if ! gh api -X POST "repos/${ORG}/${repo}/git/refs" \
+       -f ref="refs/heads/${CLEANUP_BRANCH}" \
+       -f sha="$head_sha" >/dev/null 2>&1; then
+    echo "  ${repo}: branch creation FAILED (skip)"
+    PR_CREATE_FAILED+=("${ORG}/${repo}")
+    continue
+  fi
+
+  file_sha=$(gh api "repos/${ORG}/${repo}/contents/.github/workflows/${file}" --jq '.sha')
+  if ! delete_err=$(gh api -X DELETE "repos/${ORG}/${repo}/contents/.github/workflows/${file}" \
+       -f message="chore: remove per-repo claude review caller; org ruleset handles it" \
+       -f sha="$file_sha" \
+       -f branch="$CLEANUP_BRANCH" 2>&1); then
+    echo "  ${repo}: DELETE commit FAILED: ${delete_err}"
+    # Clean up the branch we just created so a re-run can retry cleanly.
+    gh api -X DELETE "repos/${ORG}/${repo}/git/refs/heads/${CLEANUP_BRANCH}" >/dev/null 2>&1 || true
+    PR_CREATE_FAILED+=("${ORG}/${repo}")
+    # Light pacing to ride out any GitHub secondary rate limits on writes
+    sleep 5
+    continue
+  fi
+  # Pace successful writes too — GitHub's secondary rate limit on content
+  # mutations is the most likely cause of the original failures.
+  sleep 1
+
+  pr_body="Org-wide rollout cleanup. The Repository Ruleset \"${RULESET_NEW_NAME}\" on \`${ORG}\` runs the Claude blocking review via \`${ORG}/.github/.github/workflows/claude-required-review.yml\`, so per-repo callers produce duplicate runs.
+
+Removing this file makes the ruleset the sole driver. Sibling \`claude.yml\` (mention handler) is unrelated and stays.
+
+Plan: \`docs/plans/2026-04-30-required-workflows-nightowlstudiollc.md\` Phase 4 / 5."
+
+  if ! pr_url=$(gh pr create --repo "${ORG}/${repo}" --base "$default_branch" --head "$CLEANUP_BRANCH" \
+                --title "chore: remove per-repo claude review caller" --body "$pr_body" 2>&1); then
+    echo "  ${repo}: gh pr create FAILED: ${pr_url}"
+    PR_CREATE_FAILED+=("${ORG}/${repo}")
+    continue
+  fi
+  OPENED_PRS+=("$pr_url")
+  echo "  ${repo}: ${pr_url}"
+
+  # Enable auto-merge; use `command gh` to bypass the user's local pr-merge
+  # wrapper (it expects a checked-out git repo). The wrapper's purpose is to
+  # gate manual merges through merge-lock + pre-merge-review.sh — that's not
+  # applicable here, where we're just setting GitHub's auto-merge flag for a
+  # PR in a different repo. The actual merge happens server-side later, with
+  # no local hooks involved.
+  if ! merge_err=$(command gh pr merge --auto --squash --delete-branch "$pr_url" 2>&1); then
+    if [[ "$merge_err" =~ already ]]; then
+      :   # idempotent
+    else
+      echo "    auto-merge FAILED: ${merge_err}"
+      AUTO_MERGE_FAILED+=("${pr_url}")
+    fi
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+echo
+echo "=== Step 1+2 done ==="
+echo "Cleanup PRs opened (${#OPENED_PRS[@]}):"
+printf '  %s\n' "${OPENED_PRS[@]:-(none)}"
+if [[ ${#EXISTING_PRS[@]} -gt 0 ]]; then
+  echo
+  echo "Pre-existing cleanup PRs (${#EXISTING_PRS[@]}):"
+  printf '  %s\n' "${EXISTING_PRS[@]}"
+fi
+if [[ ${#AUTO_MERGE_FAILED[@]} -gt 0 ]]; then
+  echo
+  echo "Auto-merge could NOT be enabled (${#AUTO_MERGE_FAILED[@]} — manual merge required):"
+  printf '  %s\n' "${AUTO_MERGE_FAILED[@]}"
+fi
+if [[ ${#PR_CREATE_FAILED[@]} -gt 0 ]]; then
+  echo
+  echo "PR creation FAILED (${#PR_CREATE_FAILED[@]} — investigate before re-running):"
+  printf '  %s\n' "${PR_CREATE_FAILED[@]}"
+fi
+
+echo
+echo "NEXT: wait for cleanup PRs to auto-merge (watch their checks), then run:"
+echo "  $(basename "$0") --expand-scope"
+echo "to expand ruleset scope to ~ALL."

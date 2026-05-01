@@ -552,3 +552,69 @@ jobs:
             echo "**Verdict:** UNKNOWN (unexpected format — defaulting to PASS)" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+
+      - name: Minimize PASS review comment
+        if: always() && steps.doc-check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # Minimize PASS comments so downstream scrapers (post-push-status.sh
+          # and similar tooling) don't treat them as unresolved findings. BLOCK
+          # comments must remain visible — humans need to act on them. The
+          # comment body is preserved in the PR thread under a collapsed
+          # "Resolved" disclosure, so the audit trail is intact.
+
+          # Skip if the [skip-claude-review] escape hatch was used.
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")
+          if echo "$PR_BODY" | grep -qE '\[skip-claude-review(\]|:)'; then
+            echo "[skip-claude-review] override active — nothing to minimize."
+            exit 0
+          fi
+
+          VERDICT_FILE="/tmp/review-verdict.txt"
+          if [ ! -f "$VERDICT_FILE" ]; then
+            echo "No verdict file — nothing to minimize."
+            exit 0
+          fi
+          if ! head -1 "$VERDICT_FILE" | grep -q "VERDICT: PASS"; then
+            echo "Verdict is not PASS — leaving comment visible."
+            exit 0
+          fi
+
+          OWNER="${REPO%/*}"
+          NAME="${REPO#*/}"
+
+          # Locate the just-posted claude-blocking-review comment for this exact
+          # SHA. `last: 20` is plenty — the comment was posted seconds ago.
+          COMMENT_ID=$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  comments(last: 20) {
+                    nodes { id body isMinimized }
+                  }
+                }
+              }
+            }' \
+            -f owner="$OWNER" -f name="$NAME" -F number="$PR_NUMBER" \
+            --jq ".data.repository.pullRequest.comments.nodes[] | select(.isMinimized == false) | select(.body | startswith(\"<!-- claude-blocking-review sha=$SHA\")) | .id" \
+            2>/dev/null | head -1)
+
+          if [ -z "$COMMENT_ID" ]; then
+            echo "No PASS comment found for SHA $SHA — nothing to minimize (the bot may have failed to post)."
+            exit 0
+          fi
+
+          # classifier: RESOLVED is the right semantics — the issue raised by
+          # the reviewer (whether to BLOCK) was resolved with a PASS verdict.
+          # OUTDATED would be wrong (the verdict isn't stale, it's settled).
+          if gh api graphql \
+              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: RESOLVED}) { clientMutationId } }' \
+              -f id="$COMMENT_ID" >/dev/null 2>&1; then
+            echo "Minimized PASS comment $COMMENT_ID."
+          else
+            echo "::warning::Failed to minimize PASS comment $COMMENT_ID — non-fatal."
+          fi

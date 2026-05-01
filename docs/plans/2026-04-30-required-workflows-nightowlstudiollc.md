@@ -192,3 +192,25 @@ Rollback at any phase: set `enforcement: disabled` on the ruleset, or delete it 
 - Does NightOwl want different BLOCK thresholds than smartwatermelon? If yes, that's a fork of `claude-blocking-review.yml` (or a new `extra_instructions` knob) — not a Ruleset decision. Note for follow-up.
 - Should the ruleset target `~DEFAULT_BRANCH` only (default), or also include long-lived release branches if NightOwl uses them? Decide once branch conventions stabilize.
 - Worth a parallel conversation: are there other rules NightOwl wants org-wide (e.g. linear history, signed commits, required reviewers)? Bundling them into one ruleset is cheaper than discovering them piecemeal. Out of scope for this plan, but flag it during Phase 0.
+
+## Postscript — 2026-04-30 rollout attempt: PAUSED
+
+A first pass at this rollout was attempted on 2026-04-30 and **paused after multiple failure modes that the plan above did not anticipate**. The fleet ended the day in its starting position (per-repo `claude-blocking-review.yml` callers on every active NightOwl repo); the org ruleset (id `15802253` on `nightowlstudiollc`) is currently **disabled**. **Do not re-enable the ruleset or re-attempt scope expansion** until the open questions below are answered empirically.
+
+Empirical findings, all of which break assumptions in the plan above:
+
+1. **`enforcement: "evaluate"` is Enterprise-only.** On Team plan the API silently accepts it and the ruleset enforces as `active` from the moment it's created. Phase 3's "audit week" was production from PR #1.
+2. **A cleanup PR that DELETES the per-repo workflow file the PR is gated by is unmergeable.** For same-repo PRs GitHub uses workflows from the head; the head removes the file → workflow doesn't fire → required check `claude-review / run-review` never appears. The plan's Phase 5 "Per-repo `claude-code-review.yml` files in NightOwl repos are deletable" assumed admin override would handle the gap; it doesn't (see point 3).
+3. **`gh pr merge --admin` bypasses branch protection but NOT rulesets.** Once the ruleset's `workflows` rule is unsatisfied, even admin cannot override without explicit `bypass_actors` configured on the ruleset itself.
+4. **Expanding ruleset scope to `~ALL` does NOT retroactively trigger the required workflow on existing open PRs in newly-included repos.** `gh pr close && gh pr reopen` does not trigger it either. Apparently only an actual push to the PR head does. PRs in the new scope sit forever waiting for a check that never fires.
+5. **Empirically, when the workflow does fire, the resulting check name is `claude-review / run-review`** (job-name / reusable-job-name), not `Claude Required Review` (the workflow file's `name:`). The ruleset still considers itself satisfied, but the failure mode when the workflow doesn't fire at all looks identical to a name mismatch.
+
+Operational artifacts from the attempt are committed to this repo as `nightowl-ruleset-setup.sh`, `nightowl-restore-blocking-review.sh`, and `nightowl-ruleset-rollout.sh.broken`. The rollout artifact uses the `.broken` suffix (not `.sh`) so it can't be accidentally executed and so the shell-lint hooks ignore it — its step 1 unconditionally sets `enforcement="active"`, which re-armed the intentionally-disabled ruleset on every `--apply` re-run. Fix that bug (make state assertions conditional on current state) and rename back to `.sh` before any reuse.
+
+Open questions to resolve on a single test PR before any future re-enable attempt:
+
+- Does the org-level workflow (`nightowlstudiollc/.github/.github/workflows/claude-required-review.yml`) actually fire when a fresh PR is **pushed** in a ruleset-scoped repo with no per-repo caller present? Watch the run in `nightowlstudiollc/.github`'s Actions tab and the PR's check_runs. (The plan above takes "scope expansion → workflow fires on every PR" as axiomatic.)
+- What event types cause the ruleset's required workflow to (re-)trigger on an existing PR? `synchronize` (push) presumably; `reopened` apparently does not.
+- If the rollout will eventually require removing per-repo files, what sequence avoids both the chicken-and-egg AND the "scope-expansion-doesn't-fire-on-existing-PRs" gap simultaneously? The original plan ordered "remove per-repo files first, then expand scope" — that ordering is unworkable with both gotchas active.
+
+Once those are answered, the plan above can be revised with a corrected Phase 4 sequence (or scrapped in favor of indefinite per-repo file maintenance).

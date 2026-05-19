@@ -221,9 +221,22 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check for Dependabot PR
+        id: dependabot-check
+        if: steps.doc-check.outputs.skip != 'true'
+        run: |
+          if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
+            echo "::notice::Dependabot PR — skipping AI review (version bumps are low-risk)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Verdict:** SKIPPED (Dependabot version bump)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Estimate review parameters
         id: estimate
-        if: steps.doc-check.outputs.skip != 'true'
+        if: steps.doc-check.outputs.skip != 'true' && steps.dependabot-check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -281,7 +294,7 @@ jobs:
           echo "| Timeout | ${TIMEOUT}m |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Minimize prior review comments
-        if: steps.doc-check.outputs.skip != 'true'
+        if: steps.doc-check.outputs.skip != 'true' && steps.dependabot-check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -336,7 +349,7 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        if: steps.doc-check.outputs.skip != 'true'
+        if: steps.doc-check.outputs.skip != 'true' && steps.dependabot-check.outputs.skip != 'true'
         timeout-minutes: ${{ fromJSON(steps.estimate.outputs.timeout_minutes) }}
         continue-on-error: true  # infrastructure failure must not block merges
         uses: anthropics/claude-code-action@26ec041249acb0a944c0a47b6c0c13f05dbc5b44  # v1
@@ -475,11 +488,17 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           CLAUDE_OUTCOME: ${{ steps.claude-review.outcome }}
           DOC_SKIP: ${{ steps.doc-check.outputs.skip }}
+          DEPENDABOT_SKIP: ${{ steps.dependabot-check.outputs.skip }}
         run: |
           # Short-circuit: doc-only diff already wrote its summary in the
           # Check for doc-only diff step. Nothing to verify, nothing to block.
           if [ "$DOC_SKIP" = "true" ]; then
             echo "Doc-only skip — no verdict required."
+            exit 0
+          fi
+
+          if [ "$DEPENDABOT_SKIP" = "true" ]; then
+            echo "Dependabot skip — no verdict required."
             exit 0
           fi
 
@@ -554,7 +573,7 @@ jobs:
           fi
 
       - name: Minimize PASS review comment
-        if: always() && steps.doc-check.outputs.skip != 'true'
+        if: always() && steps.doc-check.outputs.skip != 'true' && steps.dependabot-check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

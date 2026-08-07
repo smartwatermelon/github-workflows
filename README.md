@@ -158,6 +158,99 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 
 ---
 
+## `dependabot-auto-merge`
+
+Reusable workflow: approves and auto-merges Dependabot PRs for patch and
+minor version updates once CI passes. Major-version bumps are left open
+for manual review.
+
+### Setup
+
+`.github/workflows/dependabot-auto-merge.yml` in your repo:
+
+```yaml
+name: Dependabot Auto-Merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot-auto-merge:
+    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v1
+```
+
+Also add `can_approve_pull_request_reviews: true` to the repo's Actions
+workflow permissions (Settings → Actions → General → Workflow
+permissions), or run the fleet-wide fix in this repo's
+`README.md`/issue #87 history. Without it, `gh pr review --approve`
+fails; the workflow degrades to a visible `::warning::` instead of a
+silent stall, but auto-merge still won't proceed if the repo's branch
+protection requires an approval.
+
+**Do NOT add `secrets: inherit` to the caller.** This workflow needs no
+secrets beyond the `GITHUB_TOKEN` it mints internally and declares no
+`secrets:` input. Splitting this workflow out of each caller repo (so
+that fixing a bug means editing one file, not 26+) creates a real
+temptation: a future maintainer who hits an auth-shaped failure here
+has an easy one-line "fix" available in `secrets: inherit`. That line
+would hand every repo secret — `CLAUDE_CODE_OAUTH_TOKEN`, deploy keys,
+anything else the repo holds — to a job that runs against
+externally-authored PR content under `pull_request_target`. The
+workflow's no-checkout property (see below) does not protect against
+this: it only means a secret leak, if it happened, wouldn't arrive
+bundled with an obvious code-execution vector. If `gh pr review` or
+`gh pr merge` is failing for a reason unrelated to
+`can_approve_pull_request_reviews`, debug the actual cause — don't
+reach for `secrets: inherit`.
+
+### Security invariant: no `actions/checkout`
+
+This workflow uses `pull_request_target`, which runs with base-branch
+secrets available — the trigger implicated in several real supply-chain
+incidents (Ultralytics, nx, tj-actions) when combined with a checkout
+of PR-controlled code. This workflow is safe today because it never
+executes PR code: the only actions are API calls (`dependabot/fetch-metadata`,
+`gh pr review`, `gh pr merge`). **`actions/checkout` must never be added
+to this file.** Two guardrails enforce this (closes #64):
+
+- `self-review.yml`'s `guard-no-checkout` job greps this repo's own
+  copy of `dependabot-auto-merge.yml` and fails the PR if
+  `actions/checkout` appears.
+- `claude-review-audit.sh` performs a read-only, fleet-wide check: any
+  caller stub referencing `dependabot-auto-merge.yml` that contains
+  `actions/checkout` or `secrets: inherit` is flagged in the audit
+  report. This check does not block or gate anything — it's audit-only,
+  same as the rest of that script.
+
+### Versioning
+
+Tagged with a prefixed namespace — `dependabot-auto-merge-v1`,
+`dependabot-auto-merge-v1.0.0`, etc. — rather than the bare `v1`/`v2`/`v3`
+tags used by `claude-blocking-review` and `claude-assistant`. Git tags
+are repo-scoped, not per-file; a bare `v1` on this repo already exists
+and is live, consumed by `claude-assistant.yml@v1`. A second, unrelated
+file can't safely "start its own v1" in the same tag namespace.
+
+### Rollout discipline
+
+New tags of this workflow (and behavior-changing bumps) are pointed at
+from 2-3 low-traffic pilot repos first, pinned to the specific new tag
+(not a floating major). Let at least one real Dependabot PR flow
+through each pilot and confirm correct patch/minor-only behavior before
+repointing any floating tag fleet-wide. This workflow approves and
+merges PRs unattended with no fallback reviewer behind it (unlike
+`claude-blocking-review`, which explicitly skips Dependabot PRs) — a
+bug here ships to every repo pinned to the affected tag at once, so it
+gets the same pilot-then-fleet discipline as the org-level rollout
+work.
+
+---
+
 ## `claude-assistant`
 
 Reusable workflow that invokes Claude Code Action. The caller handles triggers

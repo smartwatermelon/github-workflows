@@ -1,0 +1,110 @@
+name: Dependabot Auto-Merge
+
+# Reusable workflow: safely auto-merges Dependabot PRs after CI passes.
+# Scope is narrow:
+#  - Only runs when github.actor == 'dependabot[bot]' (not spoofable;
+#    GitHub sets this from the authenticated user).
+#  - Only auto-merges patch + minor updates; major-version bumps are
+#    left open for manual review.
+#  - Uses pull_request_target so the BASE-branch workflow runs, not
+#    the PR branch's — a PR modifying this file cannot bypass itself.
+#  - Never executes PR code; the only actions taken are `gh pr review`
+#    and `gh pr merge --auto`, both GitHub-side API calls.
+#
+# DO NOT add `actions/checkout` to this workflow. It uses
+# `pull_request_target`, which runs with base-branch secrets available.
+# It is currently safe BECAUSE no PR-controlled code is ever executed —
+# only API calls (fetch-metadata, gh pr review, gh pr merge). Checking
+# out PR code here would expose those secrets to malicious dependency
+# PRs (see the Ultralytics, nx, and tj-actions incidents). This
+# invariant is also enforced by a CI guardrail — see self-review.yml's
+# `guard-no-checkout` job in this repo, and the read-only fleet-wide
+# check in claude-review-audit.sh. Closes #64.
+#
+# Callers MUST NOT use `secrets: inherit`. This workflow needs no
+# secrets beyond the ambient `GITHUB_TOKEN` it mints itself — it does
+# not declare a `secrets:` block below and none should be added for
+# convenience. `secrets: inherit` on a caller hands every repo secret
+# (CLAUDE_CODE_OAUTH_TOKEN, deploy keys, etc.) to a job that evaluates
+# `pull_request_target` on externally-authored PR content. The
+# no-checkout property above doesn't protect against that leak — it
+# only means the leak, if it ever happened, wouldn't arrive bundled
+# with an obvious code-execution vector. Splitting this file out of
+# each caller repo makes `secrets: inherit` look like a tempting
+# one-line fix the next time someone hits an auth error here; it is
+# not a fix, it is a new secret-leak vector this split must not
+# introduce. Caller stubs should declare no `secrets:` block at all.
+#
+# `gh pr review --approve` satisfies branch-protection rules that
+# require review. `--auto` means the merge only happens after all
+# status checks pass; failing CI leaves the PR open indefinitely.
+# Both `gh` calls degrade to a visible ::warning:: rather than a hard
+# failure — see #87 (a hard failure on either call left an
+# unactionable red check with no visible cause).
+#
+# Usage in a caller workflow:
+#
+#   permissions:
+#     contents: write
+#     pull-requests: write
+#
+#   jobs:
+#     dependabot-auto-merge:
+#       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v1
+#
+# Do NOT add a `secrets:` block to the caller (see above).
+#
+# Versioning: this file uses a prefixed tag namespace
+# (dependabot-auto-merge-v1, dependabot-auto-merge-v1.0.0, ...) rather
+# than the bare v1/v2/v3 tags used elsewhere in this repo. Those bare
+# tags are already live and consumed by claude-assistant.yml@v1; a
+# second, unrelated file cannot safely "start its own v1" in the same
+# repo-wide tag namespace.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Verify caller permissions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Mirrors claude-blocking-review.yml's preflight — fail loudly and
+          # specifically if the caller didn't grant contents:write /
+          # pull-requests:write, rather than letting `gh pr merge` fail
+          # later with an unattributable error (the #87 failure mode).
+          if ! gh api "repos/${REPO}/pulls/${PR_NUMBER}" --silent 2>/dev/null; then
+            echo "::error::Permission check failed."
+            echo "::error::The caller workflow must declare top-level permissions:"
+            echo "::error::  contents: write, pull-requests: write"
+            exit 1
+          fi
+
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
+
+      - name: Approve and enable auto-merge (patch/minor only)
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review --approve "$PR_URL" \
+            || echo "::warning::Approval failed (check can_approve_pull_request_reviews is enabled for this repo); continuing to auto-merge."
+          gh pr merge --auto --squash --delete-branch "$PR_URL" \
+            || echo "::warning::Auto-merge enable failed — check branch protection / auto-merge repo setting."

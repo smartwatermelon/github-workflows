@@ -11,18 +11,17 @@ name: Self-Review
 # Replaces the .github/workflows/claude-code-review.yml caller that was
 # deleted in commit 52e688b during the v1 rename.
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-  id-token: write
-
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
 jobs:
   claude-review:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
     uses: ./.github/workflows/claude-blocking-review.yml
     with:
       pr_number: ${{ github.event.pull_request.number }}
@@ -36,3 +35,43 @@ jobs:
         - Grep/regex changes in the escape-hatch path (see #38 history)
     secrets:
       claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  guard-no-checkout:
+    # Plain-shell job, no LLM call involved — deliberately NOT a step
+    # inside claude-review above (that job is `uses:
+    # ./.github/workflows/claude-blocking-review.yml`; a job is either a
+    # reusable-workflow call or a normal job with steps, not both) and
+    # deliberately not folded into the Claude review prompt (that job
+    # skips workflow-self-modification PRs, which is exactly the PR
+    # category this guardrail exists to check). Closes #64.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fail if dependabot-auto-merge.yml uses actions/checkout
+        run: |
+          file=".github/workflows/dependabot-auto-merge.yml"
+          if [ ! -f "$file" ]; then
+            echo "::notice::${file} not found — nothing to check."
+            exit 0
+          fi
+          # Strip comment lines first — the header comment in this file
+          # legitimately names `actions/checkout` while explaining why it
+          # must never be added, which a bare substring grep would flag
+          # against itself. Match the real usage form (a `uses:` step),
+          # not just the string appearing anywhere in the file.
+          if grep -v '^\s*#' "$file" | grep -qE 'uses:\s*actions/checkout'; then
+            echo "::error::${file} must NEVER use actions/checkout."
+            echo "::error::This workflow uses pull_request_target with no-checkout as its"
+            echo "::error::core safety property. Adding actions/checkout would expose"
+            echo "::error::base-branch secrets to externally-authored PR content. See the"
+            echo "::error::header comment in ${file} and issue #64."
+            exit 1
+          fi
+          echo "No actions/checkout found in ${file} — guardrail passed."

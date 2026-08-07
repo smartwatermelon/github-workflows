@@ -77,6 +77,14 @@ uses_blocking_review() {
   echo "${content}" | grep -q "claude-blocking-review\.yml"
 }
 
+# Check if a workflow file's content references the dependabot-auto-merge
+# reusable workflow (caller stub, in any repo in the fleet)
+uses_dependabot_auto_merge() {
+  local content
+  content=$(strip_comments "${1}")
+  echo "${content}" | grep -q "dependabot-auto-merge\.yml"
+}
+
 # Check if a workflow file is the Claude assistant (responds to @claude)
 is_claude_assistant() {
   local content
@@ -176,6 +184,28 @@ check_repo() {
         else
           fail "Caller does not appear to pass claude_oauth_token to blocking review"
           issues+=("In ${wf}, add: secrets: claude_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}")
+        fi
+      fi
+
+      if uses_dependabot_auto_merge "${raw}"; then
+        # READ-ONLY audit check for #64's guardrail extended to caller stubs
+        # fleet-wide (the reusable's own no-checkout invariant is enforced
+        # by self-review.yml's guard-no-checkout job, but that only ever
+        # sees this repo's copy of the file — it never sees the 26+ caller
+        # stubs living in other repos, which is exactly where
+        # `actions/checkout` or `secrets: inherit` would actually be added).
+        # This does not block or gate anything — it only surfaces in the
+        # audit report, matching the rest of this script's behavior.
+        if echo "${raw}" | grep -q "actions/checkout"; then
+          fail "Caller stub ${wf} references dependabot-auto-merge.yml AND contains actions/checkout"
+          issues+=("SECURITY: remove actions/checkout from ${wf} — dependabot-auto-merge.yml uses pull_request_target and must never check out PR code (see #64)")
+        fi
+        if echo "${raw}" | grep -q "secrets:[[:space:]]*inherit"; then
+          fail "Caller stub ${wf} references dependabot-auto-merge.yml AND uses secrets: inherit"
+          issues+=("SECURITY: remove 'secrets: inherit' from ${wf} — dependabot-auto-merge.yml needs no repo secrets; inherit hands every repo secret to a pull_request_target job evaluating external PR content")
+        fi
+        if ! echo "${raw}" | grep -q "actions/checkout" && ! echo "${raw}" | grep -q "secrets:[[:space:]]*inherit"; then
+          ok "Dependabot auto-merge caller: ${wf} (no checkout, no secrets: inherit)"
         fi
       fi
 
@@ -345,6 +375,7 @@ printf "  2. Caller passes claude_oauth_token secret to reusable workflow\n"
 printf "  3. Secret: CLAUDE_CODE_OAUTH_TOKEN (repo + org level)\n"
 printf "  4. Branch protection & required status checks (for blocking review)\n"
 printf "  5. GitHub Actions enabled\n"
+printf "  6. Dependabot auto-merge caller stubs: no actions/checkout, no secrets: inherit (audit-only, #64)\n"
 printf "\nNOTE: This script is read-only — it reports issues but makes no changes.\n"
 
 for owner in "${OWNERS[@]}"; do

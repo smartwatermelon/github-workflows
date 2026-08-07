@@ -359,7 +359,41 @@ blocking-review workflow doesn't gate its own install/bump PR.
 For `nightowlstudiollc`, this script is intentionally not used — that org gets
 the workflow-templates picker via [`nightowlstudiollc/.github`](https://github.com/nightowlstudiollc/.github)
 (mirrors `smartwatermelon/.github` workflow-templates; verified appearing under
-"By Night Owl Studio" in the Actions → New workflow UI), and (planned)
-Repository Rulesets for org-wide enforcement.
+"By Night Owl Studio" in the Actions → New workflow UI). Repository Rulesets
+for org-wide enforcement were attempted once and rolled back (see
+`docs/plans/2026-04-30-required-workflows-nightowlstudiollc.md`); a
+re-attempt is deliberately not planned here and would need its own review
+given that history.
+
+## New-repo bootstrap script (`smartwatermelon` only)
+
+`new-smartwatermelon-repo.sh` is the creation-time counterpart to the
+bulk-install script above — for a genuinely *new* `smartwatermelon` repo,
+rather than retrofitting an existing one. `smartwatermelon` being a User
+account means it can't use GitHub's org-only workflow-templates picker
+*or* Repository Rulesets to auto-attach anything on repo creation, so this
+script is the closest available approximation: one command instead of
+"create repo, then remember to run the bulk-install script, then remember
+the one repo setting no template can seed."
+
+```bash
+./new-smartwatermelon-repo.sh <name> [--private]
+```
+
+This does three things:
+
+1. `gh repo create <name> --template smartwatermelon/repo-template` — a
+   real [GitHub template repository](https://github.com/smartwatermelon/repo-template)
+   containing caller stubs for `claude.yml`, `claude-code-review.yml`,
+   `dependabot-auto-merge.yml`, and a `.github/dependabot.yml`. Template
+   repos are a general GitHub feature, not gated to Organizations, so this
+   part genuinely works the same for a User account as it would for an Org.
+2. Sets `can_approve_pull_request_reviews: true` via the Actions API — the
+   one setting a template repo cannot seed, and the exact fix from issue
+   [#87](https://github.com/smartwatermelon/github-workflows/issues/87).
+3. Prints a reminder for the one step that can't be scripted at all: run
+   `/install-github-app` from Claude Code (or add the
+   `CLAUDE_CODE_OAUTH_TOKEN` secret manually) so the Claude workflows can
+   actually run.
 
 Plan: `docs/plans/2026-04-30-bulk-install-smartwatermelon-fleet.md`.

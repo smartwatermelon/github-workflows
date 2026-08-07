@@ -43,8 +43,37 @@ name: Claude Blocking Review
 # Migration from v2: remove any `max_turns:` input from caller workflows.
 # Workflow validation will fail until the input is removed.
 #
+# v3.1.0 (2026-08-07): #86 — each skip path (workflow-self-modification,
+# doc-only diff, Dependabot-authored PR) now writes its own skip/skip_reason
+# output pair, and the "Check review verdict" step logs the actual reason
+# that fired instead of a hardcoded "Doc-only skip" message regardless of
+# which path triggered. #88 — the [skip-claude-review] escape hatch can now
+# be scoped to a specific commit; see below. Both changes are additive:
+# existing unscoped markers and log consumers are unaffected.
+#
 # Escape hatch: add [skip-claude-review: reason] to the PR body to bypass
-# enforcement with an audit trail.
+# enforcement with an audit trail. This unscoped form is honored
+# unconditionally on every subsequent run for the life of the PR (deliberate
+# grandfathered behavior — it's a visible, chosen opt-out, not a bug).
+#
+# To scope a skip to a single commit instead, use:
+#   [skip-claude-review sha=<short-sha>: reason]
+# where <short-sha> is a >=7-character prefix of the commit SHA you want to
+# bypass review for (github.event.pull_request.head.sha — the actual PR
+# head commit, not github.sha, which is a synthetic merge-commit SHA on
+# pull_request events). The marker only applies while it matches the
+# CURRENT head SHA; if the PR is later pushed to, the head SHA changes and
+# the marker stops applying (visible as an ::notice:: in the step summary),
+# which is the intended anti-staleness behavior.
+#
+# IMPORTANT: editing the PR body does not retrigger this workflow (no
+# `edited` in the trigger list), so to make a newly-added sha=-scoped
+# marker actually take effect on an existing failed/blocked run, use:
+#   gh run rerun <run-id>
+# on that run — do NOT push a new commit to "retry." A new commit changes
+# the head SHA and would immediately invalidate a marker scoped to the old
+# one; `gh run rerun` re-runs the job against the SAME SHA the marker names,
+# which is the only way a sha=-scoped marker can take effect.
 
 on:
   workflow_call:
@@ -167,6 +196,7 @@ jobs:
               .github/workflows/*.yml|.github/workflows/*.yaml)
                 echo "::notice::PR modifies .github/workflows/ ($f) — claude-code-action refuses to run by design. Skipping; real review will run on the next non-workflow PR after merge."
                 echo "skip=true" >> "$GITHUB_OUTPUT"
+                echo "skip_reason=workflow-self-modification" >> "$GITHUB_OUTPUT"
                 echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
                 echo "**Verdict:** SKIPPED (workflow-self-modification)" >> "$GITHUB_STEP_SUMMARY"
                 exit 0
@@ -214,6 +244,7 @@ jobs:
             FILE_COUNT=$(printf '%s\n' "$FILES" | grep -c .)
             echo "::notice::Doc-only diff (${FILE_COUNT} file(s)) — skipping Claude review."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=doc-only diff (${FILE_COUNT} file(s))" >> "$GITHUB_OUTPUT"
             echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
             echo "**Verdict:** SKIPPED (doc-only diff, ${FILE_COUNT} file(s))" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -228,6 +259,7 @@ jobs:
           if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
             echo "::notice::Dependabot PR — skipping AI review (version bumps are low-risk)."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=Dependabot version bump" >> "$GITHUB_OUTPUT"
             echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
             echo "**Verdict:** SKIPPED (Dependabot version bump)" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -488,30 +520,73 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           CLAUDE_OUTCOME: ${{ steps.claude-review.outcome }}
           DOC_SKIP: ${{ steps.doc-check.outputs.skip }}
+          DOC_SKIP_REASON: ${{ steps.doc-check.outputs.skip_reason }}
           DEPENDABOT_SKIP: ${{ steps.dependabot-check.outputs.skip }}
+          DEPENDABOT_SKIP_REASON: ${{ steps.dependabot-check.outputs.skip_reason }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Short-circuit: doc-only diff already wrote its summary in the
-          # Check for doc-only diff step. Nothing to verify, nothing to block.
+          # Short-circuit: an earlier step already wrote its own summary and
+          # decided to skip. Log the ACTUAL path that fired (from its own
+          # skip_reason output) rather than a hardcoded message — the
+          # doc-check step handles two distinct skip paths (workflow-self-
+          # modification and doc-only diff) that must not be conflated.
           if [ "$DOC_SKIP" = "true" ]; then
-            echo "Doc-only skip — no verdict required."
+            echo "Review skipped (${DOC_SKIP_REASON}) — no verdict required."
             exit 0
           fi
 
           if [ "$DEPENDABOT_SKIP" = "true" ]; then
-            echo "Dependabot skip — no verdict required."
+            echo "Review skipped (${DEPENDABOT_SKIP_REASON}) — no verdict required."
             exit 0
           fi
 
-          # Escape hatch: [skip-claude-review] or [skip-claude-review: reason] in PR body
-          # bypasses enforcement. The extended regex matches both the bare token and the
-          # documented `: reason` form advertised by our error messages. See issue #38
-          # for the prior -F fixed-string pattern that only matched the bare form.
+          # Escape hatch: [skip-claude-review: reason] or the SHA-scoped form
+          # [skip-claude-review sha=<short-sha>: reason] in the PR body bypasses
+          # enforcement.
+          #
+          # SHA scoping (see #88): a bare/unscoped marker (no `sha=`) is
+          # grandfathered and always honored, unconditionally, exactly as
+          # before — this is a deliberate, visible opt-out an operator chose,
+          # not the bug. A `sha=`-scoped marker is only honored when its SHA
+          # is a >=7-character prefix of the CURRENT head SHA
+          # (github.event.pull_request.head.sha — NOT github.sha, which is a
+          # synthetic merge-commit SHA on pull_request events that the
+          # operator never sees or types). Shorter prefixes are treated as
+          # invalid/unmatched to prevent a trivial bypass like `sha=a`.
+          #
+          # To make a sha=-scoped marker take effect after adding it to the
+          # PR body: use `gh run rerun <run-id>` on the existing failed/
+          # blocked run. A new commit/push changes the head SHA and correctly
+          # invalidates a SHA-scoped marker (intentional anti-staleness
+          # behavior) — `gh run rerun` re-checks the SAME commit, which is
+          # the only way a sha=-scoped marker can actually apply.
           PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")
-          if echo "$PR_BODY" | grep -qE '\[skip-claude-review(\]|:)'; then
-            echo "::notice::Claude Code Review enforcement skipped via [skip-claude-review] marker in PR body."
-            echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Verdict:** SKIPPED (override in PR body)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          MARKER=$(echo "$PR_BODY" | grep -oE '\[skip-claude-review[^]]*\]' | head -1 || echo "")
+
+          if [ -n "$MARKER" ]; then
+            MARKER_SHA=$(echo "$MARKER" | grep -oE 'sha=[0-9a-fA-F]+' | head -1 | cut -d= -f2 || echo "")
+
+            if [ -z "$MARKER_SHA" ]; then
+              # Unscoped marker — grandfathered, unconditional skip.
+              echo "::notice::Claude Code Review enforcement skipped via unscoped [skip-claude-review] marker in PR body."
+              echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Verdict:** SKIPPED (override in PR body)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            elif [ "${#MARKER_SHA}" -lt 7 ]; then
+              # Too short to trust as a real SHA prefix — reject as invalid,
+              # fall through to a real review.
+              echo "::warning::[skip-claude-review sha=${MARKER_SHA}] marker rejected — sha= value must be at least 7 characters. Proceeding with review."
+            elif [ "${HEAD_SHA#"$MARKER_SHA"}" != "$HEAD_SHA" ]; then
+              # HEAD_SHA starts with MARKER_SHA — scoped marker matches current head.
+              echo "::notice::Claude Code Review enforcement skipped via [skip-claude-review sha=${MARKER_SHA}] marker matching current head sha=${HEAD_SHA}."
+              echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Verdict:** SKIPPED (override in PR body, sha=${MARKER_SHA})" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            else
+              # Scoped marker present but doesn't match current head — make
+              # the non-application visible instead of silently proceeding.
+              echo "::notice::Skip marker present but scoped to sha=${MARKER_SHA}, current head is sha=${HEAD_SHA} — marker not honored. Use 'gh run rerun' on a run against sha=${MARKER_SHA} to apply it, or add a new marker scoped to sha=${HEAD_SHA}."
+            fi
           fi
 
           VERDICT_FILE="/tmp/review-verdict.txt"
@@ -586,11 +661,24 @@ jobs:
           # comment body is preserved in the PR thread under a collapsed
           # "Resolved" disclosure, so the audit trail is intact.
 
-          # Skip if the [skip-claude-review] escape hatch was used.
+          # Skip if the [skip-claude-review] escape hatch is ACTIVE for this
+          # commit (see #88) — i.e. an unscoped marker (always active) or a
+          # sha=-scoped marker whose SHA matches the current head. A
+          # sha=-scoped marker that does NOT match the current head means
+          # the review actually ran and a real PASS comment may exist to
+          # minimize, so that case must fall through rather than bail here
+          # (matching the same precedence used in "Check review verdict").
           PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")
-          if echo "$PR_BODY" | grep -qE '\[skip-claude-review(\]|:)'; then
-            echo "[skip-claude-review] override active — nothing to minimize."
-            exit 0
+          MARKER=$(echo "$PR_BODY" | grep -oE '\[skip-claude-review[^]]*\]' | head -1 || echo "")
+          if [ -n "$MARKER" ]; then
+            MARKER_SHA=$(echo "$MARKER" | grep -oE 'sha=[0-9a-fA-F]+' | head -1 | cut -d= -f2 || echo "")
+            if [ -z "$MARKER_SHA" ]; then
+              echo "[skip-claude-review] unscoped override active — nothing to minimize."
+              exit 0
+            elif [ "${#MARKER_SHA}" -ge 7 ] && [ "${SHA#"$MARKER_SHA"}" != "$SHA" ]; then
+              echo "[skip-claude-review sha=${MARKER_SHA}] override active for current head — nothing to minimize."
+              exit 0
+            fi
           fi
 
           VERDICT_FILE="/tmp/review-verdict.txt"

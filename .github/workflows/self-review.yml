@@ -49,9 +49,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Fail if dependabot-auto-merge.yml uses actions/checkout
         run: |
@@ -60,7 +61,12 @@ jobs:
             echo "::notice::${file} not found — nothing to check."
             exit 0
           fi
-          if grep -q "actions/checkout" "$file"; then
+          # Strip comment lines first — the header comment in this file
+          # legitimately names `actions/checkout` while explaining why it
+          # must never be added, which a bare substring grep would flag
+          # against itself. Match the real usage form (a `uses:` step),
+          # not just the string appearing anywhere in the file.
+          if grep -v '^\s*#' "$file" | grep -qE 'uses:\s*actions/checkout'; then
             echo "::error::${file} must NEVER use actions/checkout."
             echo "::error::This workflow uses pull_request_target with no-checkout as its"
             echo "::error::core safety property. Adding actions/checkout would expose"

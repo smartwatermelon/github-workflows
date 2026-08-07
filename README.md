@@ -10,7 +10,7 @@ bugs, reliability regressions, security vulnerabilities, or data-loss risks.
 ### What triggers a BLOCK
 
 | Category | Examples |
-|----------|---------|
+| ---------- | --------- |
 | Clear bug | Wrong calculation, inverted condition, off-by-one affecting real data |
 | Reliability regression | Previously working path may now fail due to this PR |
 | Security | Hardcoded credentials, auth bypass, unvalidated input to privileged op |
@@ -34,10 +34,10 @@ removed the `--max-turns` cap; reviews are now bounded only by the
 wall-clock timeout, the prompt's scope discipline, and the OAuth
 subscription quota.
 
-| Parameter | Logic | Range |
-|-----------|-------|-------|
-| **Model** | Sonnet (callers can override) | `claude-sonnet-4-6` |
-| **Timeout** | `10 + lines/100` minutes | 10–30 minutes |
+| Parameter   | Logic                         | Range               |
+| ----------- | ----------------------------- | ------------------- |
+| **Model**   | Sonnet (callers can override) | `claude-sonnet-4-6` |
+| **Timeout** | `10 + lines/100` minutes      | 10–30 minutes       |
 
 Callers can override any parameter:
 
@@ -68,6 +68,32 @@ bypass if needed.
 
 Add `[skip-claude-review: reason]` to the PR body to bypass enforcement.
 The override is logged in the step summary for audit.
+
+This unscoped form is honored unconditionally on **every** subsequent run
+for the life of the PR — it's a deliberate, visible opt-out, not scoped to
+any particular commit. That's intentional grandfathered behavior for
+markers already in use; see below for a way to bound the bypass to a
+single commit.
+
+**Scoping a skip to one commit (v3.1.0+):** add
+`[skip-claude-review sha=<short-sha>: reason]` instead, where `<short-sha>`
+is a prefix (7+ characters) of the commit SHA you want to bypass review
+for — use the PR's head commit SHA, e.g. from `gh pr view <PR> --json
+headRefOid -q .headRefOid`. The marker is only honored while it matches
+the **current** head SHA of the PR. If the PR is pushed to again, the head
+SHA changes and the marker stops applying automatically — a visible
+`::notice::` in the step summary calls this out so it isn't only
+discoverable by diffing raw run logs. Markers with a `sha=` value shorter
+than 7 characters are rejected as invalid (prevents a trivial bypass like
+`sha=a` matching anything) and the review proceeds normally.
+
+**Important: to make a `sha=`-scoped marker take effect, use `gh run rerun
+<run-id>` on the existing failed/blocked run — do not push a new commit.**
+Editing the PR body does not retrigger this workflow (there's no `edited`
+event in the trigger list), so the only way to get a fresh check run
+against the same commit is `gh run rerun`. A new commit/push changes the
+head SHA and immediately invalidates a marker scoped to the old SHA — that
+is the intended anti-staleness behavior, not a bug to work around.
 
 ### Setup
 
@@ -124,7 +150,7 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 ### Versioning
 
 | Tag | Meaning |
-|-----|---------|
+| ----- | --------- |
 | `@v3` | Current stable major version (floating — gets minor updates). v3 dropped the `max_turns` input; remove it from caller workflows when bumping. |
 | `@v2` | Previous stable major (still supported for callers that haven't migrated; passes `--max-turns` to the agent and accepts `max_turns:` input) |
 | `@v1` | Initial release line |
@@ -222,7 +248,7 @@ in the "New workflow" picker for `smartwatermelon/*` repos.
 The script classifies each repo:
 
 | Class | Action |
-|-------|--------|
+| ------- | -------- |
 | `CURRENT` | Already on the target version. No-op. |
 | `STALE` | Different pin or floating tag. Opens a PR bumping the pin. |
 | `MISSING` | No caller workflow at all. Opens a PR adding the canonical stub. |

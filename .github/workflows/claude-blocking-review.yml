@@ -661,11 +661,24 @@ jobs:
           # comment body is preserved in the PR thread under a collapsed
           # "Resolved" disclosure, so the audit trail is intact.
 
-          # Skip if the [skip-claude-review] escape hatch was used.
+          # Skip if the [skip-claude-review] escape hatch is ACTIVE for this
+          # commit (see #88) — i.e. an unscoped marker (always active) or a
+          # sha=-scoped marker whose SHA matches the current head. A
+          # sha=-scoped marker that does NOT match the current head means
+          # the review actually ran and a real PASS comment may exist to
+          # minimize, so that case must fall through rather than bail here
+          # (matching the same precedence used in "Check review verdict").
           PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body 2>/dev/null || echo "")
-          if echo "$PR_BODY" | grep -qE '\[skip-claude-review(\]|:)'; then
-            echo "[skip-claude-review] override active — nothing to minimize."
-            exit 0
+          MARKER=$(echo "$PR_BODY" | grep -oE '\[skip-claude-review[^]]*\]' | head -1 || echo "")
+          if [ -n "$MARKER" ]; then
+            MARKER_SHA=$(echo "$MARKER" | grep -oE 'sha=[0-9a-fA-F]+' | head -1 | cut -d= -f2 || echo "")
+            if [ -z "$MARKER_SHA" ]; then
+              echo "[skip-claude-review] unscoped override active — nothing to minimize."
+              exit 0
+            elif [ "${#MARKER_SHA}" -ge 7 ] && [ "${SHA#"$MARKER_SHA"}" != "$SHA" ]; then
+              echo "[skip-claude-review sha=${MARKER_SHA}] override active for current head — nothing to minimize."
+              exit 0
+            fi
           fi
 
           VERDICT_FILE="/tmp/review-verdict.txt"

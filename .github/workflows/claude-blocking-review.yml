@@ -719,7 +719,14 @@ jobs:
             if [ -z "$MARKER_SHA" ]; then
               echo "[skip-claude-review] unscoped override active — nothing to minimize."
               exit 0
-            elif [ "${#MARKER_SHA}" -ge 7 ] && [ "${SHA#"$MARKER_SHA"}" != "$SHA" ]; then
+            elif [ "${#MARKER_SHA}" -lt 7 ]; then
+              # Mirrors the "Check review verdict" step's rejection of
+              # too-short sha= values (#92) — log the same warning here so
+              # an operator debugging why a PASS comment wasn't minimized
+              # sees the same too-short-marker explanation in both steps'
+              # logs, instead of this step silently falling through.
+              echo "::warning::[skip-claude-review sha=${MARKER_SHA}] marker rejected — sha= value must be at least 7 characters. Proceeding with minimize check."
+            elif [ "${SHA#"$MARKER_SHA"}" != "$SHA" ]; then
               echo "[skip-claude-review sha=${MARKER_SHA}] override active for current head — nothing to minimize."
               exit 0
             fi

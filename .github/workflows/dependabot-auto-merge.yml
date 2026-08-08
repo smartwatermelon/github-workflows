@@ -70,7 +70,12 @@ permissions:
 
 jobs:
   auto-merge:
-    if: github.actor == 'dependabot[bot]'
+    # github.actor is set by GitHub from the authenticated identity that
+    # triggered the event and is not attacker-controllable the way event
+    # payload fields (e.g. PR title/body) are — see the file header above
+    # for the full narrow-scope rationale. Pre-existing on main; unrelated
+    # to this PR's PR_NUMBER emptiness fix.
+    if: github.actor == 'dependabot[bot]' # zizmor: ignore[bot-conditions]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,6 +92,22 @@ jobs:
           # specifically if the caller didn't grant contents:write /
           # pull-requests:write, rather than letting `gh pr merge` fail
           # later with an unattributable error (the #87 failure mode).
+          #
+          # PR_NUMBER must be checked for emptiness FIRST (#94): if the
+          # caller uses a non-pull_request-family trigger,
+          # github.event.pull_request.number is empty, and
+          # "repos/${REPO}/pulls/" (trailing slash, no number) is the
+          # list-PRs endpoint — it returns HTTP 200 and would silently
+          # pass this gate despite asserting nothing. The `if:
+          # github.actor == 'dependabot[bot]'` job condition makes this
+          # only reachable via caller misconfiguration, but a caller that
+          # matches the actor gate on some other event still needs a loud
+          # failure here rather than the merge calls degrading to
+          # `::warning::` and exiting green with nothing merged.
+          if [[ -z "${PR_NUMBER}" ]]; then
+            echo "::error::PR_NUMBER is empty — caller must use a pull_request or pull_request_target trigger."
+            exit 1
+          fi
           if ! gh api "repos/${REPO}/pulls/${PR_NUMBER}" --silent 2>/dev/null; then
             echo "::error::Permission check failed."
             echo "::error::The caller workflow must declare top-level permissions:"

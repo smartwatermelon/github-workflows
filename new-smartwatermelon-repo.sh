@@ -41,9 +41,17 @@ usage() {
 NAME="$1"
 shift
 
+[[ "${NAME}" =~ ^[a-zA-Z0-9_.-]+$ ]] || {
+  printf "Error: invalid repo name '%s' — must match [a-zA-Z0-9_.-]+\n" "${NAME}" >&2
+  usage
+}
+
 VISIBILITY="--public"
 if [[ "${1:-}" == "--private" ]]; then
   VISIBILITY="--private"
+elif [[ -n "${1:-}" ]]; then
+  printf "Error: unrecognized argument '%s'\n" "${1}" >&2
+  usage
 fi
 
 REPO="${OWNER}/${NAME}"

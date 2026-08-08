@@ -53,6 +53,22 @@ jobs:
           # actionable message (see #90 — mac-dev-server-setup#58 wasted a
           # CI cycle on exactly this before someone dug through logs to
           # find the missing secret).
+          #
+          # Deliberately unconditional (no `if:` gate) — unlike
+          # claude-blocking-review.yml, this workflow has no doc-only/
+          # Dependabot skip paths to gate behind. `required: false` on the
+          # secrets: block above is NOT a signal that the token is
+          # optional for this job to function: it exists solely to avoid
+          # a GitHub dispatch-time validation quirk where `required: true`
+          # combined with the CALLER's job-level `if:` (the @claude-mention
+          # guard in claude.yml) causes startup_failure on every run,
+          # including no-op runs where the job would correctly be skipped
+          # (see 67630a7). By the time this reusable workflow's `run` job
+          # actually executes, the caller has already confirmed @claude
+          # was mentioned by an authorized user — there is no code path
+          # here where the token is genuinely unnecessary. Every fleet
+          # caller (confirmed via `gh search code`) passes
+          # secrets.CLAUDE_CODE_OAUTH_TOKEN through unconditionally.
           if [ "$TOKEN_SET" != "true" ]; then
             echo "::error::CLAUDE_CODE_OAUTH_TOKEN secret is not set for this repository."
             echo "::error::Add it under Settings > Secrets and variables > Actions, or run /install-github-app from Claude Code."

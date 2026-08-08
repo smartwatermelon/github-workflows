@@ -51,6 +51,14 @@ name: Claude Blocking Review
 # be scoped to a specific commit; see below. Both changes are additive:
 # existing unscoped markers and log consumers are unaffected.
 #
+# v3.2.0 (2026-08-07): #90 — a new "Verify CLAUDE_CODE_OAUTH_TOKEN is
+# configured" step runs before the Claude review step and fails loudly
+# with an actionable ::error:: if the caller's secret resolves empty,
+# instead of letting claude-code-action fail deep in its own error output
+# (previously misreported as a substantive review BLOCK rather than an
+# infrastructure/config gap). Additive: callers with the secret correctly
+# configured see no behavior change.
+#
 # Escape hatch: add [skip-claude-review: reason] to the PR body to bypass
 # enforcement with an audit trail. This unscoped form is honored
 # unconditionally on every subsequent run for the life of the PR (deliberate
@@ -378,6 +386,42 @@ jobs:
             fi
           done <<< "$PRIOR_IDS"
           echo "Minimized $COUNT prior review comment(s) as OUTDATED."
+
+      - name: Verify CLAUDE_CODE_OAUTH_TOKEN is configured
+        if: steps.doc-check.outputs.skip != 'true' && steps.dependabot-check.outputs.skip != 'true'
+        env:
+          TOKEN_SET: ${{ secrets.claude_oauth_token != '' }}
+        run: |
+          # Deterministic (non-LLM) precondition check — fail fast and
+          # loudly if the caller's CLAUDE_CODE_OAUTH_TOKEN secret is
+          # missing, rather than letting claude-code-action fail deep in
+          # its own error output with CLAUDE_OUTCOME: failure and no
+          # verdict rendered (see #90 — mac-dev-server-setup#58 wasted a
+          # CI cycle on exactly this: the downstream verdict-parsing logic
+          # correctly fail-closed to BLOCK, but the real cause — a missing
+          # secret — was only visible deep in the action's own logs, and
+          # got misreported as a substantive review BLOCK rather than an
+          # infrastructure/config gap).
+          #
+          # `secrets: claude_oauth_token: required: true` on this
+          # workflow_call only guarantees the caller supplied a `secrets:`
+          # block — it does NOT guarantee the underlying repo secret it
+          # references is actually set. A caller passing
+          # `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` from a repo where that
+          # secret was never added still satisfies the `required: true`
+          # check while passing an empty string through.
+          #
+          # Gated behind the same doc-only/Dependabot skip outputs as the
+          # review step itself (rather than running unconditionally right
+          # after the permissions preflight) so a repo with a missing
+          # secret still gets a clean SKIPPED verdict on doc-only or
+          # Dependabot PRs, instead of failing on PRs that would never
+          # have invoked claude-code-action anyway.
+          if [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN secret is not set for this repository."
+            echo "::error::Add it under Settings > Secrets and variables > Actions, or run /install-github-app from Claude Code."
+            exit 1
+          fi
 
       - name: Run Claude Code Review
         id: claude-review

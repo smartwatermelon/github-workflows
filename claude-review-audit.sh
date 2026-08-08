@@ -196,15 +196,27 @@ check_repo() {
         # `actions/checkout` or `secrets: inherit` would actually be added).
         # This does not block or gate anything — it only surfaces in the
         # audit report, matching the rest of this script's behavior.
-        if echo "${raw}" | grep -q "actions/checkout"; then
+        #
+        # Operate on comment-stripped content and anchor to the `uses:`
+        # form, matching self-review.yml's guard-no-checkout job (#97) —
+        # a raw/unanchored grep would false-positive on a caller stub that
+        # merely mentions "actions/checkout" or "secrets: inherit" in a
+        # comment (e.g. a warning not to add them).
+        local stripped
+        stripped=$(strip_comments "${raw}")
+        local has_checkout=false has_secrets_inherit=false
+        echo "${stripped}" | grep -qE 'uses:[[:space:]]*actions/checkout' && has_checkout=true
+        echo "${stripped}" | grep -qE 'secrets:[[:space:]]*inherit' && has_secrets_inherit=true
+
+        if [[ "${has_checkout}" == true ]]; then
           fail "Caller stub ${wf} references dependabot-auto-merge.yml AND contains actions/checkout"
           issues+=("SECURITY: remove actions/checkout from ${wf} — dependabot-auto-merge.yml uses pull_request_target and must never check out PR code (see #64)")
         fi
-        if echo "${raw}" | grep -q "secrets:[[:space:]]*inherit"; then
+        if [[ "${has_secrets_inherit}" == true ]]; then
           fail "Caller stub ${wf} references dependabot-auto-merge.yml AND uses secrets: inherit"
           issues+=("SECURITY: remove 'secrets: inherit' from ${wf} — dependabot-auto-merge.yml needs no repo secrets; inherit hands every repo secret to a pull_request_target job evaluating external PR content")
         fi
-        if ! echo "${raw}" | grep -q "actions/checkout" && ! echo "${raw}" | grep -q "secrets:[[:space:]]*inherit"; then
+        if [[ "${has_checkout}" == false && "${has_secrets_inherit}" == false ]]; then
           ok "Dependabot auto-merge caller: ${wf} (no checkout, no secrets: inherit)"
         fi
       fi

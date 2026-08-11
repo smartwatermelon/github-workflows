@@ -67,7 +67,7 @@ name: Dependabot Auto-Merge
 #     dependabot-auto-merge:
 #       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v2
 #       with:
-#         trusted_namespaces: 'dependabot,actions,smartwatermelon'  # adjust org per caller
+#         trusted_namespaces: 'smartwatermelon'  # dependabot/actions always trusted; add your org(s)
 #
 # Do NOT add a `secrets:` block to the caller (see above).
 #

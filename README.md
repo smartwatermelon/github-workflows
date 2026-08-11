@@ -117,6 +117,14 @@ on:
 
 jobs:
   claude-review:
+    # Dependabot PRs run under a restricted token with no repo-secret
+    # access. If this job dispatches for one anyway, GitHub can't satisfy
+    # the reusable workflow's required `claude_oauth_token` secret and the
+    # whole run fails with startup_failure BEFORE any step — including the
+    # reusable workflow's own in-job Dependabot fast-pass — gets to run.
+    # Gate at the caller so the secret is never referenced in a context
+    # that can't supply it. See smartwatermelon/github-workflows#115.
+    if: github.actor != 'dependabot[bot]'
     uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3
     with:
       pr_number: ${{ github.event.pull_request.number }}

@@ -171,7 +171,7 @@ for manual review.
 ```yaml
 name: Dependabot Auto-Merge
 
-on:
+on: # zizmor: ignore[dangerous-triggers] required to run from base branch; no PR code executed here
   pull_request_target:
     types: [opened, synchronize, reopened]
 

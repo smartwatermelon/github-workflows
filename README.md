@@ -181,7 +181,9 @@ permissions:
 
 jobs:
   dependabot-auto-merge:
-    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v1
+    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v2
+    with:
+      trusted_namespaces: 'smartwatermelon' # adjust to your own org; dependabot/actions are always trusted
 ```
 
 Also add `can_approve_pull_request_reviews: true` to the repo's Actions

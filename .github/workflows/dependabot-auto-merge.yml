@@ -2,14 +2,28 @@ name: Dependabot Auto-Merge
 
 # Reusable workflow: safely auto-merges Dependabot PRs after CI passes.
 # Scope is narrow:
-#  - Only runs when github.actor == 'dependabot[bot]' (not spoofable;
-#    GitHub sets this from the authenticated user).
-#  - Only auto-merges patch + minor updates; major-version bumps are
-#    left open for manual review.
+#  - Only runs when the PR author is dependabot[bot], checked via
+#    github.event.pull_request.user.login (not github.actor, which
+#    zizmor flags as spoofable in other trigger contexts: it reflects
+#    the last actor to touch the ref, not who opened the PR).
+#  - Patch/minor: always auto-merged.
+#  - Major: only auto-merged when EVERY listed dependency belongs to a
+#    trusted namespace (dependabot/, actions/, plus each caller's own
+#    org — see the `trusted_namespaces` input below). One
+#    untrusted dep in a grouped update blocks the whole group.
 #  - Uses pull_request_target so the BASE-branch workflow runs, not
 #    the PR branch's — a PR modifying this file cannot bypass itself.
 #  - Never executes PR code; the only actions taken are `gh pr review`
-#    and `gh pr merge --auto`, both GitHub-side API calls.
+#    and `gh pr merge`, both GitHub-side API calls.
+#  - Computes patch-vs-major from previous-version/new-version itself
+#    rather than trusting steps.metadata.outputs.update-type. On
+#    2026-04-28, fetch-metadata@v2 mislabeled a 2.0.1 -> 3.0.0
+#    reusable-workflow bump as semver-patch; trust math, not labels.
+#    This shortcut only applies to single-dependency PRs — those
+#    version fields describe one package, so a grouped PR (more than
+#    one entry in dependency-names) always goes through the
+#    namespace-allowlist path instead, even if it "looks like" a
+#    patch/minor bump.
 #
 # DO NOT add `actions/checkout` to this workflow. It uses
 # `pull_request_target`, which runs with base-branch secrets available.
@@ -36,8 +50,9 @@ name: Dependabot Auto-Merge
 # introduce. Caller stubs should declare no `secrets:` block at all.
 #
 # `gh pr review --approve` satisfies branch-protection rules that
-# require review. `--auto` means the merge only happens after all
-# status checks pass; failing CI leaves the PR open indefinitely.
+# require review; it's a no-op on repos where no approving review is
+# required. `gh pr merge --auto` means the merge only happens after
+# all status checks pass; failing CI leaves the PR open indefinitely.
 # Both `gh` calls degrade to a visible ::warning:: rather than a hard
 # failure — see #87 (a hard failure on either call left an
 # unactionable red check with no visible cause).
@@ -50,19 +65,39 @@ name: Dependabot Auto-Merge
 #
 #   jobs:
 #     dependabot-auto-merge:
-#       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v1
+#       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v2
+#       with:
+#         trusted_namespaces: 'dependabot,actions,smartwatermelon'  # adjust org per caller
 #
 # Do NOT add a `secrets:` block to the caller (see above).
 #
 # Versioning: this file uses a prefixed tag namespace
-# (dependabot-auto-merge-v1, dependabot-auto-merge-v1.0.0, ...) rather
+# (dependabot-auto-merge-v1, dependabot-auto-merge-v2, ...) rather
 # than the bare v1/v2/v3 tags used elsewhere in this repo. Those bare
 # tags are already live and consumed by claude-assistant.yml@v1; a
 # second, unrelated file cannot safely "start its own v1" in the same
 # repo-wide tag namespace.
+#
+# v2 (this version): ported fleet-wide hardening that had drifted
+# ahead of v1 in per-repo copies — user.login actor check,
+# SHA-pinned fetch-metadata, self-computed major/minor decision with
+# a trusted-namespace allowlist for major bumps — and generalized the
+# allowlist's org name into a `trusted_namespaces` input so
+# non-smartwatermelon callers (e.g. nightowlstudiollc) aren't stuck
+# with another org's namespace hardcoded in. See smartwatermelon/dev-env#20.
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      trusted_namespaces:
+        description: >-
+          Comma-separated dependency-name namespace prefixes (without
+          trailing slash) that are auto-mergeable on a MAJOR version
+          bump. dependabot and actions are always trusted; add your
+          own org here, e.g. 'smartwatermelon' or 'nightowlstudiollc'.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -70,12 +105,10 @@ permissions:
 
 jobs:
   auto-merge:
-    # github.actor is set by GitHub from the authenticated identity that
-    # triggered the event and is not attacker-controllable the way event
-    # payload fields (e.g. PR title/body) are — see the file header above
-    # for the full narrow-scope rationale. Pre-existing on main; unrelated
-    # to this PR's PR_NUMBER emptiness fix.
-    if: github.actor == 'dependabot[bot]' # zizmor: ignore[bot-conditions]
+    # user.login reflects who opened the PR and is not attacker-controllable
+    # the way github.actor is (github.actor tracks the last committer on the
+    # ref, which a human pushing to an existing Dependabot PR can spoof).
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -98,12 +131,7 @@ jobs:
           # github.event.pull_request.number is empty, and
           # "repos/${REPO}/pulls/" (trailing slash, no number) is the
           # list-PRs endpoint — it returns HTTP 200 and would silently
-          # pass this gate despite asserting nothing. The `if:
-          # github.actor == 'dependabot[bot]'` job condition makes this
-          # only reachable via caller misconfiguration, but a caller that
-          # matches the actor gate on some other event still needs a loud
-          # failure here rather than the merge calls degrading to
-          # `::warning::` and exiting green with nothing merged.
+          # pass this gate despite asserting nothing.
           if [[ -z "${PR_NUMBER}" ]]; then
             echo "::error::PR_NUMBER is empty — caller must use a pull_request or pull_request_target trigger."
             exit 1
@@ -117,15 +145,87 @@ jobs:
 
       - name: Fetch Dependabot metadata
         id: metadata
-        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
 
-      - name: Approve and enable auto-merge (patch/minor only)
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+      - name: Decide if PR is auto-mergeable
+        id: policy
+        env:
+          PREV_VERSION: ${{ steps.metadata.outputs.previous-version }}
+          NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
+          DEP_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          TRUSTED_NAMESPACES: ${{ inputs.trusted_namespaces }}
+        run: |
+          set -euo pipefail
+          extract_major() {
+            printf '%s' "$1" | sed -E 's@^v?([0-9]+).*@\1@' | grep -E '^[0-9]+$' || echo ""
+          }
+          # fetch-metadata's previous-version/new-version describe a single
+          # dependency; for a grouped Dependabot PR (dependency-names has
+          # more than one entry) they aren't guaranteed to represent every
+          # package in the group. Trusting them as a group-wide patch/minor
+          # shortcut could let an untrusted-namespace major bump ride along
+          # inside a group whose primary package looks like a patch. Force
+          # any multi-dependency PR through the namespace-allowlist path
+          # instead of the version-shortcut path.
+          dep_count=$(printf '%s' "${DEP_NAMES:-}" \
+            | tr ',' '\n' \
+            | sed -E 's@^[[:space:]]+|[[:space:]]+$@@g' \
+            | grep -c -v '^$' || true)
+          if [ "$dep_count" -le 1 ]; then
+            prev_major=$(extract_major "$PREV_VERSION")
+            new_major=$(extract_major "$NEW_VERSION")
+            if [ -n "$prev_major" ] && [ -n "$new_major" ] && [ "$prev_major" = "$new_major" ]; then
+              echo "decision=merge" >> "$GITHUB_OUTPUT"
+              echo "::notice::Patch/minor bump within major v$prev_major; auto-merging"
+              exit 0
+            fi
+          fi
+          # Fail closed if dependency-names is missing — we cannot apply
+          # the trusted-namespace allowlist without it.
+          if [ -z "${DEP_NAMES:-}" ]; then
+            echo "decision=skip" >> "$GITHUB_OUTPUT"
+            echo "::notice::Empty dependency-names ($PREV_VERSION -> $NEW_VERSION); leaving for manual review"
+            exit 0
+          fi
+          # Namespaces are validated against a strict charset (alnum, -, _)
+          # before being spliced into the ERE below — dependency-name
+          # namespaces on GitHub/npm/etc. never contain regex metacharacters,
+          # so rejecting anything else closes the injection surface (e.g. a
+          # caller passing '.*' could otherwise widen the match to
+          # everything and auto-merge untrusted major bumps).
+          namespace_pattern="^(dependabot|actions"
+          if [ -n "${TRUSTED_NAMESPACES:-}" ]; then
+            while IFS= read -r ns; do
+              [ -z "$ns" ] && continue
+              if ! printf '%s' "$ns" | grep -qE '^[A-Za-z0-9_-]+$'; then
+                echo "::error::trusted_namespaces entry '$ns' has chars outside [A-Za-z0-9_-]; refusing allowlist."
+                exit 1
+              fi
+              namespace_pattern="${namespace_pattern}|${ns}"
+            done <<< "$(printf '%s' "$TRUSTED_NAMESPACES" | tr ',' '\n' | sed -E 's@^[[:space:]]+|[[:space:]]+$@@g')"
+          fi
+          namespace_pattern="${namespace_pattern})/"
+          remainder=$(printf '%s' "$DEP_NAMES" \
+            | tr ',' '\n' \
+            | sed -E 's@^[[:space:]]+|[[:space:]]+$@@g' \
+            | grep -v '^$' \
+            | grep -vE "$namespace_pattern" \
+            || true)
+          if [ -z "$remainder" ]; then
+            echo "decision=merge" >> "$GITHUB_OUTPUT"
+            echo "::notice::$PREV_VERSION -> $NEW_VERSION, deps in trusted namespace; auto-merging"
+          else
+            echo "decision=skip" >> "$GITHUB_OUTPUT"
+            echo "::notice::Non-allowlisted deps present: $remainder"
+          fi
+
+      - name: Approve and enable auto-merge
+        if: steps.policy.outputs.decision == 'merge'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr review --approve "$PR_URL" \
-            || echo "::warning::Approval failed (check can_approve_pull_request_reviews is enabled for this repo); continuing to auto-merge."
+            || echo "::warning::Approval failed (check can_approve_pull_request_reviews setting); continuing."
           gh pr merge --auto --squash --delete-branch "$PR_URL" \
             || echo "::warning::Auto-merge enable failed — check branch protection / auto-merge repo setting."

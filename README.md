@@ -103,10 +103,10 @@ Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
 
 #### 2. Create the caller workflow
 
-`.github/workflows/claude-code-review.yml` in your repo:
+`.github/workflows/claude-blocking-review.yml` in your repo:
 
 ```yaml
-name: Claude Code Review
+name: Claude Blocking Review
 
 on:
   pull_request:
@@ -116,16 +116,18 @@ on:
       - 'docs/**'
 
 jobs:
+  # Pin to v3.1.0 or later, not a caller-level `if: github.actor !=
+  # 'dependabot[bot]'` gate. A job-level `if:` that evaluates false means
+  # this job never dispatches, so a required status check on it never
+  # reports — it stays permanently pending on Dependabot PRs under
+  # branch protection that requires the check, blocking auto-merge
+  # entirely. v3.1.0+ instead skips Dependabot PRs from INSIDE the job
+  # (see this file's own "Check for Dependabot PR" step below), so the
+  # job still runs and reports a real PASS. See
+  # smartwatermelon/github-workflows#115/#117 for the incident that
+  # established this; a caller-level gate was tried and reverted.
   claude-review:
-    # Dependabot PRs run under a restricted token with no repo-secret
-    # access. If this job dispatches for one anyway, GitHub can't satisfy
-    # the reusable workflow's required `claude_oauth_token` secret and the
-    # whole run fails with startup_failure BEFORE any step — including the
-    # reusable workflow's own in-job Dependabot fast-pass — gets to run.
-    # Gate at the caller so the secret is never referenced in a context
-    # that can't supply it. See smartwatermelon/github-workflows#115.
-    if: github.actor != 'dependabot[bot]'
-    uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3
+    uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3.1.0
     with:
       pr_number: ${{ github.event.pull_request.number }}
       # extra_instructions: |
@@ -188,6 +190,17 @@ permissions:
   pull-requests: write
 
 jobs:
+  # This caller stub is intentionally a thin delegate, not a full
+  # implementation. The version-comparison logic, the dependabot/actions
+  # always-trusted namespace defaults, and the actor-spoofing guard all
+  # live in the canonical workflow (smartwatermelon/github-workflows,
+  # this file) rather than here — a local diff that only shows this
+  # stub shrinking will not show that logic; it moved, not disappeared.
+  # See smartwatermelon/dev-env#20 for why: copy-pasting this workflow
+  # into every consuming repo meant fixing a bug meant editing N repos,
+  # not one. The tag pin below (not a SHA) is deliberate: reusable
+  # workflows here use a repo-wide semver tag convention (see
+  # "Versioning" below), not per-action SHA pinning.
   dependabot-auto-merge:
     uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v2
     with:

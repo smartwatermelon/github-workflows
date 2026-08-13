@@ -95,6 +95,11 @@ on:
           trailing slash) that are auto-mergeable on a MAJOR version
           bump. dependabot and actions are always trusted; add your
           own org here, e.g. 'smartwatermelon' or 'nightowlstudiollc'.
+          Only matches 'namespace/name'-style dependency names (GitHub
+          Actions org/repo, npm scoped packages like '@scope/name').
+          Unscoped package-manager deps (npm 'lodash', PyPI 'requests',
+          etc. with no slash) never match and always fall through to
+          manual review on a major bump, regardless of this allowlist.
         type: string
         required: false
         default: ''
@@ -180,9 +185,14 @@ jobs:
               exit 0
             fi
           fi
-          # Fail closed if dependency-names is missing — we cannot apply
-          # the trusted-namespace allowlist without it.
-          if [ -z "${DEP_NAMES:-}" ]; then
+          # Fail closed if dependency-names is missing or whitespace-only —
+          # we cannot apply the trusted-namespace allowlist without it.
+          # Checking dep_count (already trimmed/normalized above) rather
+          # than the raw DEP_NAMES string catches a whitespace-only value
+          # (e.g. "  "), which would otherwise pass this guard, then have
+          # the namespace-allowlist path below trim it to an empty
+          # remainder and incorrectly decide "merge".
+          if [ "$dep_count" -eq 0 ]; then
             echo "decision=skip" >> "$GITHUB_OUTPUT"
             echo "::notice::Empty dependency-names ($PREV_VERSION -> $NEW_VERSION); leaving for manual review"
             exit 0

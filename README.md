@@ -127,6 +127,7 @@ jobs:
   # smartwatermelon/github-workflows#115/#117 for the incident that
   # established this; a caller-level gate was tried and reverted.
   claude-review:
+    # Replace YOUR_ORG with smartwatermelon, or your fork's org, before use.
     uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3.1.0
     with:
       pr_number: ${{ github.event.pull_request.number }}
@@ -161,7 +162,7 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 
 | Tag | Meaning |
 | ----- | --------- |
-| `@v3` | Current stable major version (floating — gets minor updates). v3 dropped the `max_turns` input; remove it from caller workflows when bumping. |
+| `@v3.1.0` | Minimum recommended pin — includes the in-job Dependabot skip (see caller example above). `@v3` alone is still floating-safe if you don't need that fix, but new callers should pin `@v3.1.0` or later. v3 dropped the `max_turns` input; remove it from caller workflows when bumping. |
 | `@v2` | Previous stable major (still supported for callers that haven't migrated; passes `--max-turns` to the agent and accepts `max_turns:` input) |
 | `@v1` | Initial release line |
 | `@main` | Latest (may include breaking changes) |
@@ -182,6 +183,11 @@ for manual review.
 name: Dependabot Auto-Merge
 
 on: # zizmor: ignore[dangerous-triggers] required to run from base branch; no PR code executed here
+  # This suppression is only valid as long as this caller stays a thin
+  # delegate: no actions/checkout, no execution of PR-controlled code.
+  # See "Security invariant: no actions/checkout" below for the full
+  # justification. If you add checkout or run PR content in this file,
+  # remove this suppression — it would then be hiding a real risk.
   pull_request_target:
     types: [opened, synchronize, reopened]
 

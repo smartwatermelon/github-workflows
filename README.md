@@ -128,7 +128,8 @@ jobs:
   # established this; a caller-level gate was tried and reverted.
   claude-review:
     # Replace YOUR_ORG with smartwatermelon, or your fork's org, before use.
-    uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3.1.0
+    # Track floating @v3, not an exact @v3.x.y — see "Versioning" below.
+    uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3
     with:
       pr_number: ${{ github.event.pull_request.number }}
       # extra_instructions: |
@@ -162,11 +163,48 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 
 | Tag | Meaning |
 | ----- | --------- |
-| `@v3.1.2` | Current release — includes the GHSA-8q5r-mmjf-575q fix (`claude-code-action` v1.0.193), `persist-credentials: false`, the `github.actor` template-injection fix, and `actions/checkout` v7.0.1. Recommended pin for all callers. |
-| `@v3.1.0` | Minimum recommended pin — includes the in-job Dependabot skip (see caller example above). `@v3` alone is still floating-safe if you don't need that fix, but new callers should pin `@v3.1.0` or later. v3 dropped the `max_turns` input; remove it from caller workflows when bumping. |
+| `@v3` | **Recommended for all callers.** Floating major — tracks the latest v3.x.y release, so security fixes reach you when the tag is repointed here, without a PR in your repo. |
+| `@v3.1.2` | Current exact release — the GHSA-8q5r-mmjf-575q fix (`claude-code-action` v1.0.193), `persist-credentials: false`, the `github.actor` template-injection fix, and `actions/checkout` v7.0.1. Use an exact pin only if you have a specific reason to freeze; see the warning below. |
+| `@v3.1.0` | Earlier v3 release — first with the in-job Dependabot skip. v3 dropped the `max_turns` input; remove it from caller workflows when bumping from v2. |
 | `@v2` | Previous stable major (still supported for callers that haven't migrated; passes `--max-turns` to the agent and accepts `max_turns:` input) |
 | `@v1` | **Deprecated — no longer updated.** See below. |
 | `@main` | Latest (may include breaking changes) |
+
+#### Prefer floating `@v3` over an exact pin
+
+Exact tags like `@v3.1.0` are immutable. A caller pinned to one **silently
+opts out of every fix published afterwards**, including security fixes, until
+someone opens a PR in that repo.
+
+This is not hypothetical. GHSA-8q5r-mmjf-575q (RCE and secret exfiltration via
+`claude-code-action` < 1.0.74) was remediated here by bumping the action and
+repointing the floating tags. **19 repos never received it**, because they
+pinned `@v3.1.0` — a tag cut before the fix existed. They kept resolving to the
+vulnerable action while looking perfectly conformant in their own workflow
+files. Earlier guidance in this table recommended exactly that pin, which is
+how it happened.
+
+Floating `@v3` inverts this: one tag repoint here reaches every caller.
+
+The trade-off is real — a bad release also reaches everyone at once. What
+bounds it: this repo is branch-protected with a required blocking review, the
+reusable workflows SHA-pin every third-party action they use, `dependabot.yml`
+surfaces those bumps as reviewable PRs, and floating-tag moves are manual and
+human-authorized. There is no automation that repoints a floating tag.
+
+Pin an exact version only when you have a specific reason to freeze, and treat
+it as a decision to opt out of automatic security updates — so audit it
+yourself.
+
+**Auditing note:** a caller's ref cannot be checked by pattern-matching. Both
+failure modes seen in this fleet looked correct in the consumer file — a raw
+commit SHA annotated `# v3`, and an exact `@v3.1.0` serving months-old content.
+Resolve the ref to the action version it actually delivers:
+
+```console
+$ gh api "repos/smartwatermelon/github-workflows/contents/.github/workflows/claude-blocking-review.yml?ref=<REF>" \
+    --jq '.content' | base64 -d | grep -oE 'claude-code-action@[a-f0-9]{8}'
+```
 
 #### The `v1` line is deprecated
 

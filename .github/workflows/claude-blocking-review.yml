@@ -687,6 +687,37 @@ jobs:
               # No verdict found — distinguish a real Claude-side failure
               # (timeout, agent error) from an infrastructure flake.
               if [ "$CLAUDE_OUTCOME" = "failure" ]; then
+                # Before blaming the review, check whether GitHub's API is
+                # simply unavailable. claude-code-action calls
+                # GET /repos/{owner}/{repo}/collaborators/{actor}/permission
+                # with no retry, so a single 503 there kills the run — see #133.
+                # During the 2026-08-17 incident that endpoint failed ~40% of
+                # calls while the status page reported everything operational,
+                # and the message below ("review timed out") sent people to
+                # re-push, which cannot help and burns a CI run each time.
+                #
+                # Probing the same endpoint from here is a heuristic, not
+                # proof: it runs seconds later, so a recovered API produces a
+                # false negative and we fall through to the normal message.
+                # It only ever ADDS a more accurate diagnosis; it never
+                # converts a failure into a pass.
+                INFRA_HINT=""
+                if ! gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" \
+                     --jq '.permission' >/dev/null 2>&1; then
+                  INFRA_HINT="yes"
+                fi
+
+                if [ -n "$INFRA_HINT" ]; then
+                  echo "::error::GitHub API is unavailable — this is NOT a problem with your PR."
+                  echo "::error::claude-code-action's actor permission check failed and it does not retry (see smartwatermelon/github-workflows#133)."
+                  echo "::error::Re-run this job when GitHub recovers: gh run rerun ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY}"
+                  echo "::error::Do NOT re-push — the diff is irrelevant and a new commit will fail the same way."
+                  echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
+                  echo "**Verdict:** INCOMPLETE — GitHub API unavailable, not a PR problem." >> "$GITHUB_STEP_SUMMARY"
+                  echo "Re-run the job (not a re-push) once GitHub recovers. See [#133](https://github.com/smartwatermelon/github-workflows/issues/133)." >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
+                fi
+
                 echo "::error::Review did not complete (likely timed out or failed to render verdict). No verdict rendered."
                 echo "::error::Re-push to retry, or add [skip-claude-review: reason] to the PR body to bypass."
                 echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"

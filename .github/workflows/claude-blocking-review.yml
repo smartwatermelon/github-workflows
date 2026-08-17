@@ -28,13 +28,20 @@ name: Claude Blocking Review
 #     id-token: write
 #
 #   jobs:
-#     # Pin to v3.1.0+, not a caller-level `if: github.actor !=
-#     # 'dependabot[bot]'` gate — a job-level `if:` prevents this job from
-#     # ever reporting on Dependabot PRs, which leaves a required status
-#     # check permanently pending. v3.1.0+ skips Dependabot PRs from
-#     # inside the job instead, so it still reports PASS. See #115/#117.
+#     # Track the floating @v3 tag, not an exact @v3.x.y pin. Exact tags are
+#     # immutable, so a caller pinned to one silently opts out of every
+#     # security fix published afterwards — that is exactly how ~19 repos
+#     # kept resolving to a claude-code-action vulnerable to
+#     # GHSA-8q5r-mmjf-575q long after the fix shipped. Floating @v3 means a
+#     # single tag repoint here reaches every caller.
+#     #
+#     # Do NOT add a caller-level `if: github.actor != 'dependabot[bot]'`
+#     # gate — a job-level `if:` prevents this job from ever reporting on
+#     # Dependabot PRs, which leaves a required status check permanently
+#     # pending. v3 skips Dependabot PRs from inside the job instead, so it
+#     # still reports PASS. See #115/#117.
 #     claude-review:
-#       uses: smartwatermelon/github-workflows/.github/workflows/claude-blocking-review.yml@v3.1.0
+#       uses: smartwatermelon/github-workflows/.github/workflows/claude-blocking-review.yml@v3
 #       with:
 #         pr_number: ${{ github.event.pull_request.number }}
 #         extra_instructions: |

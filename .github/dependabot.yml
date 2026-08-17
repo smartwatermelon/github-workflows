@@ -1,0 +1,20 @@
+# Dependabot: auto-PR bumps for GitHub Actions pins in .github/workflows/.
+# Primary target: anthropics/claude-code-action, pinned inside this repo's
+# reusable workflows and inherited fleet-wide through the floating v1/v3 tags.
+# Secondary: any other actions/* or third-party actions used here.
+#
+# Matches the fleet-standard config (dotfiles, claude-config, dev-env, ...)
+# with one deliberate difference: no `cooldown`. Consumer repos delay bumps
+# to let a release settle, but this repo is upstream of ~30 others — a
+# security fix here should surface immediately, not a week later. Without
+# this file, anthropics/claude-code-action sat at v1.0.70 for 123 releases
+# and went vulnerable to GHSA-8q5r-mmjf-575q (patched upstream in 1.0.74)
+# with no PR ever opened. See #123.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"

@@ -162,10 +162,37 @@ The BLOCK criteria are in the workflow prompt. To adjust:
 
 | Tag | Meaning |
 | ----- | --------- |
+| `@v3.1.2` | Current release — includes the GHSA-8q5r-mmjf-575q fix (`claude-code-action` v1.0.193), `persist-credentials: false`, the `github.actor` template-injection fix, and `actions/checkout` v7.0.1. Recommended pin for all callers. |
 | `@v3.1.0` | Minimum recommended pin — includes the in-job Dependabot skip (see caller example above). `@v3` alone is still floating-safe if you don't need that fix, but new callers should pin `@v3.1.0` or later. v3 dropped the `max_turns` input; remove it from caller workflows when bumping. |
 | `@v2` | Previous stable major (still supported for callers that haven't migrated; passes `--max-turns` to the agent and accepts `max_turns:` input) |
-| `@v1` | Initial release line |
+| `@v1` | **Deprecated — no longer updated.** See below. |
 | `@main` | Latest (may include breaking changes) |
+
+#### The `v1` line is deprecated
+
+**Tags in this repo are repo-wide, not per-file.** A git tag labels a commit,
+so every tag contains *all three* reusable workflows — `@v3.1.2` and `@v1.2.6`
+are byte-identical if they point at the same commit. The version "lines" are
+independent release tracks, not versions of separate products.
+
+`v1` was originally the track for `claude-assistant.yml`, with `v2`/`v3`
+tracking `claude-blocking-review.yml`. That split no longer reflects reality:
+**every caller in the fleet references the assistant via the `v3` line**, and
+as of 2026-08-17 no repo references `v1` at all.
+
+Maintaining two labels for one codebase costs a release step and invites the
+mistake of cutting one and not the other. So:
+
+- **`v1` is frozen** at `v1.2.6` and will not be updated further.
+- **Point every caller at the `v3` line**, including `claude-assistant.yml`
+  callers. `claude-assistant.yml@v3.1.2` is correct and current.
+- If you are still on `@v1` or `@v1.2.x`, move to `@v3.1.2`. There is no
+  interface change — the files are identical at equivalent commits.
+
+Note `dependabot-auto-merge` uses a **prefixed** namespace
+(`dependabot-auto-merge-v1`, etc.) precisely to avoid this problem. That is
+the pattern to follow if a fourth workflow is ever added here; a new workflow
+cannot safely start its own bare `v1` while one already exists.
 
 ---
 
@@ -261,9 +288,11 @@ to this file.** Two guardrails enforce this (closes #64):
 Tagged with a prefixed namespace — `dependabot-auto-merge-v1`,
 `dependabot-auto-merge-v1.0.0`, etc. — rather than the bare `v1`/`v2`/`v3`
 tags used by `claude-blocking-review` and `claude-assistant`. Git tags
-are repo-scoped, not per-file; a bare `v1` on this repo already exists
-and is live, consumed by `claude-assistant.yml@v1`. A second, unrelated
-file can't safely "start its own v1" in the same tag namespace.
+are repo-scoped, not per-file; a bare `v1` on this repo already exists.
+A second, unrelated file can't safely "start its own v1" in the same tag
+namespace. (The bare `v1` line is now frozen and deprecated — see
+"The `v1` line is deprecated" under Versioning — but the tag still exists,
+so the namespace collision this prefix avoids is permanent.)
 
 ### Rollout discipline
 
@@ -310,7 +339,9 @@ jobs:
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
-    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v1
+    # The v3 line, not v1: tags here are repo-wide, and v1 is frozen/deprecated.
+    # See "The v1 line is deprecated" under Versioning above.
+    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3.1.2
     secrets:
       claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```

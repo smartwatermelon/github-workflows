@@ -206,6 +206,34 @@ $ gh api "repos/smartwatermelon/github-workflows/contents/.github/workflows/clau
     --jq '.content' | base64 -d | grep -oE 'claude-code-action@[a-f0-9]{8}'
 ```
 
+### `zizmor.yml` — required alongside the caller stubs
+
+If you run `zizmor` (e.g. as a pre-commit hook), copy [`zizmor.yml`](./zizmor.yml)
+from this repo to your repo root when you adopt the caller stubs.
+
+Without it, zizmor's blanket hash-pin policy reports roughly **9 high findings
+against a byte-identical standard stub** — the tag refs and the required
+`permissions:` blocks — and the only workaround is `SKIP=zizmor` on every
+commit that touches a workflow.
+
+**That workaround is the hazard the config exists to remove.** Routinely
+skipping the security linter is what let `anthropics/claude-code-action` sit at
+v1.0.70 for 123 releases while carrying GHSA-8q5r-mmjf-575q. A linter people
+bypass by habit protects nothing.
+
+The config encodes two documented policy decisions and nothing else:
+
+| Rule | Treatment | Why |
+| --- | --- | --- |
+| `unpinned-uses` | `ref-pin` for `smartwatermelon/github-workflows/*`, strict `hash-pin` for everything else | Reflects the two-class policy above. Third-party findings stay visible. |
+| `excessive-permissions` | ignored for the three standard caller filenames | Those blocks are required by the reusable workflows; removing them causes `startup_failure`, not a narrower blast radius. |
+
+It is deliberately **not** a blanket mute. On a representative consumer it takes
+findings from 9 high to 2 — and the 2 that survive are genuine third-party
+actions pinned to floating majors in that repo's own workflows, which is a real
+gap worth fixing rather than policy. A repo's own workflows are still audited
+normally.
+
 #### The `v1` line is deprecated
 
 **Tags in this repo are repo-wide, not per-file.** A git tag labels a commit,

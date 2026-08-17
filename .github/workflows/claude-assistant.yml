@@ -20,9 +20,57 @@ name: Claude Code Assistant
 #       uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v1
 #       secrets:
 #         claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+#
+# Optional per-repo customization (both inputs default to empty, which
+# reproduces the action's own defaults exactly):
+#
+#       with:
+#         # Grant Claude an explicit tool list. Enumerate only the read-only
+#         # git/gh subcommands the repo actually needs, so destructive
+#         # variants (git push/reset/checkout/clean, gh pr merge) are never
+#         # granted by this repo. See the additive-semantics note below.
+#         allowed_tools: 'Read,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*)'
+#         model: 'claude-opus-4-7'
+#
+# Deliberately NOT a free-form `claude_args` passthrough: an opaque arg blob
+# lets a caller pass flags that *widen* permissions, which is the opposite of
+# what an allowlist is for. Discrete inputs keep the surface auditable from
+# the caller stub. See #141.
+#
+# IMPORTANT — `allowed_tools` is ADDITIVE, not a replacement. Verified against
+# claude-code-action v1.0.193: in tag mode (which is what this workflow runs)
+# src/modes/tag/index.ts unconditionally emits its own
+# `--allowedTools "<tag mode tools>"` and then APPENDS the caller's
+# claude_args after it. base-action/src/parse-sdk-options.ts then treats
+# `--allowedTools` and `--allowed-tools` as aliases and UNIONS every
+# occurrence (`new Set([...])`), rather than letting the last one win.
+#
+# So this input can only ever GRANT tools on top of the action's tag-mode
+# baseline — it cannot revoke anything the action grants itself. Use it to
+# add the specific tools a repo needs (and to pin `model`); do not read it as
+# a hard sandbox. Genuinely revoking a tool needs `--disallowed-tools`, which
+# this workflow does not yet expose; if you need that, open an issue rather
+# than assuming an allowlist here has removed something.
 
 on:
   workflow_call:
+    inputs:
+      allowed_tools:
+        description: |
+          Comma-separated tool allowlist passed to claude-code-action as
+          --allowed-tools. Empty (default) = the action's default tool policy.
+          NOTE: this UNIONS with the action's own tag-mode tool set, it does
+          not replace it — see the note in the header comment.
+        type: string
+        required: false
+        default: ''
+      model:
+        description: |
+          Claude model ID passed as --model. Empty (default) = the action's
+          default model.
+        type: string
+        required: false
+        default: ''
     secrets:
       claude_oauth_token:
         description: 'Claude Code OAuth token (CLAUDE_CODE_OAUTH_TOKEN secret)'
@@ -47,6 +95,94 @@ jobs:
           # it removes exposure without removing capability (zizmor:
           # artipacked).
           persist-credentials: false
+
+      - name: Validate inputs and build claude_args
+        id: args
+        env:
+          ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          # Both inputs are consumed via env: (never interpolated directly
+          # into this run: block) so a caller cannot inject shell through
+          # them. The validation below is defence-in-depth on top of that:
+          # the assembled string is handed to claude-code-action, which
+          # word-splits it as a command line, so any value that could
+          # terminate the quoted --allowed-tools argument is rejected
+          # outright rather than sanitized.
+
+          # Validate model: empty (action default) or alphanumeric/dots/
+          # hyphens. Same pattern and error style as claude-blocking-review.yml.
+          # NOTE on grep: `grep -qE '^…$'` matches PER LINE, so a multi-line
+          # value could smuggle a bad line past an otherwise-anchored pattern.
+          # Both inputs are therefore newline-checked before the charset check,
+          # using parameter expansion against a literal newline (no subshell).
+          NL=$'\n'
+          if [ -n "$MODEL" ]; then
+            if [ "${MODEL%%"$NL"*}" != "$MODEL" ]; then
+              echo "::error::model must not contain newlines."
+              exit 1
+            fi
+            if ! printf '%s' "$MODEL" | grep -qE '^[a-zA-Z0-9._-]+$'; then
+              echo "::error::Invalid model name. Must be empty (action default) or match [a-zA-Z0-9._-]+"
+              exit 1
+            fi
+          fi
+
+          # Validate allowed_tools. Reject quotes, backticks, $, ;, &, |,
+          # backslashes, and newlines — none are legitimate in a tool
+          # allowlist, and all are quote-breakout or command-substitution
+          # vectors.
+          #
+          # The permitted class is deliberately the minimum that real tool
+          # specs need, and nothing more:
+          #   letters/digits/_  tool and MCP names
+          #                     (mcp__github_inline_comment__create_inline_comment)
+          #   ,                 separator between specs
+          #   ( ) : *           Bash matcher syntax — Bash(git status:*)
+          #   space             multi-word subcommands — Bash(gh pr view:*)
+          #   . / -             paths and flags inside a matcher
+          # `+` and `@` are excluded: no tool spec format uses them.
+          #
+          # Note the space: it means values legitimately contain spaces, which
+          # is exactly why the assembled --allowed-tools argument below must
+          # stay double-quoted. Verified against claude-code-action v1.0.193:
+          # src/modes/agent/parse-tools.ts tokenizes claude_args with
+          # shell-quote (parseShellArgs), so the double quotes are honored as
+          # real shell quoting and a spec like Bash(gh pr view:*) survives
+          # intact. claude-blocking-review.yml quotes its literal allowlist
+          # for the same reason, and the action itself emits
+          # --allowedTools "..." the same way.
+          if [ -n "$ALLOWED_TOOLS" ]; then
+            # Newlines first: a multi-line value would both break the
+            # generated command line and corrupt the $GITHUB_OUTPUT write
+            # below (a bare `key=value` output entry is single-line only).
+            if [ "${ALLOWED_TOOLS%%"$NL"*}" != "$ALLOWED_TOOLS" ]; then
+              echo "::error::allowed_tools must not contain newlines."
+              exit 1
+            fi
+            if ! printf '%s' "$ALLOWED_TOOLS" | grep -qE '^[a-zA-Z0-9_,:*()./ -]+$'; then
+              echo "::error::allowed_tools contains disallowed characters."
+              echo "::error::Allowed: letters, digits, and _ , : * ( ) . / space -"
+              echo "::error::Rejected (shell-injection vectors): quotes, backticks, \$, ;, &, |, backslashes, newlines."
+              echo "::error::Example: 'Read,Bash(git status:*),Bash(gh pr view:*)'"
+              exit 1
+            fi
+          fi
+
+          # Assemble claude_args. When BOTH inputs are empty the output is the
+          # empty string, and claude-code-action's claude_args default is also
+          # the empty string — so the default path is unchanged from before
+          # these inputs existed.
+          CLAUDE_ARGS=""
+          if [ -n "$MODEL" ]; then
+            CLAUDE_ARGS="--model $MODEL"
+          fi
+          if [ -n "$ALLOWED_TOOLS" ]; then
+            CLAUDE_ARGS="${CLAUDE_ARGS:+$CLAUDE_ARGS }--allowed-tools \"$ALLOWED_TOOLS\""
+          fi
+
+          echo "claude_args=$CLAUDE_ARGS" >> "$GITHUB_OUTPUT"
+          echo "claude_args: ${CLAUDE_ARGS:-(none - action defaults)}"
 
       - name: Verify CLAUDE_CODE_OAUTH_TOKEN is configured
         env:
@@ -101,5 +237,8 @@ jobs:
           # performs the instructions in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
 
-          # Optional: restrict which tools Claude can use
-          # claude_args: '--allowed-tools Bash(gh pr:*)'
+          # Built from the `allowed_tools` / `model` workflow_call inputs by
+          # the "Validate inputs and build claude_args" step above. Empty when
+          # neither input is set, which is exactly what the action receives by
+          # default — see #141.
+          claude_args: ${{ steps.args.outputs.claude_args }}

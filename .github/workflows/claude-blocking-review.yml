@@ -433,7 +433,7 @@ jobs:
         if: steps.doc-check.outputs.skip != 'true' && steps.dependabot-check.outputs.skip != 'true'
         timeout-minutes: ${{ fromJSON(steps.estimate.outputs.timeout_minutes) }}
         continue-on-error: true  # infrastructure failure must not block merges
-        uses: anthropics/claude-code-action@26ec041249acb0a944c0a47b6c0c13f05dbc5b44  # v1
+        uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c  # v1.0.193
         with:
           # claude-code-action rejects non-User actors unless explicitly allowed.
           # Callers use this on pull_request events that fire for bot-opened PRs

@@ -41,6 +41,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          # See the matching note in claude-blocking-review.yml: nothing here
+          # consumes the persisted credential. claude-code-action takes its
+          # own github_token input and runs no git push/commit, so dropping
+          # it removes exposure without removing capability (zizmor:
+          # artipacked).
+          persist-credentials: false
 
       - name: Verify CLAUDE_CODE_OAUTH_TOKEN is configured
         env:

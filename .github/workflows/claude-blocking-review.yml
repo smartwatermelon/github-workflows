@@ -132,6 +132,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 1
+          # Nothing in this job reads the credential checkout would otherwise
+          # persist into .git/config: every gh call sets GH_TOKEN explicitly
+          # from github.token, there are no git push/fetch/pull operations,
+          # and claude-code-action authenticates via its own github_token
+          # input. Leaving it persisted only widens the blast radius of any
+          # step that reads the workspace (zizmor: artipacked).
+          persist-credentials: false
 
       - name: Verify caller permissions
         env:
@@ -268,8 +275,17 @@ jobs:
       - name: Check for Dependabot PR
         id: dependabot-check
         if: steps.doc-check.outputs.skip != 'true'
+        env:
+          # Passed via env rather than interpolated directly into the run
+          # block: `${{ }}` expansion splices the value into the shell source
+          # before bash parses it, so a hostile value would be executed rather
+          # than compared. github.actor is constrained to real account names
+          # (so not freely attacker-authored the way a PR title or branch name
+          # is), but an attacker does choose which account opens a fork PR —
+          # treat it as untrusted input and keep it out of shell source.
+          ACTOR: ${{ github.actor }}
         run: |
-          if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
+          if [ "$ACTOR" = "dependabot[bot]" ]; then
             echo "::notice::Dependabot PR — skipping AI review (version bumps are low-risk)."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "skip_reason=Dependabot version bump" >> "$GITHUB_OUTPUT"

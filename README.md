@@ -414,6 +414,68 @@ jobs:
 
 Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
 
+### Inputs
+
+| Input | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `allowed_tools` | string | `''` | Tool allowlist passed as `--allowed-tools`. Empty = action default policy. |
+| `model` | string | `''` | Model ID passed as `--model`. Empty = action default model. |
+
+Both are optional. With both empty the workflow passes no `claude_args` at
+all, so behavior is identical to a caller that sets neither.
+
+#### Restricting tools (recommended)
+
+The assistant runs with `id-token: write` and a `CLAUDE_CODE_OAUTH_TOKEN`. If
+your repo has an opinion about what Claude should be able to run, encode it as
+an allowlist rather than relying on whatever the action's defaults happen to
+be.
+
+The example below keeps `Edit`/`Write` — the assistant is expected to change
+files in its checkout, so those are in scope — but grants only **read-only
+`git`/`gh` subcommands**, so destructive variants (`git push`, `git reset`,
+`git checkout`, `git clean`, `gh pr merge`) are never granted *by this repo*.
+Read the additive-semantics note below before treating that as a guarantee:
+
+```yaml
+    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3.1.2
+    with:
+      allowed_tools: 'Read,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment'
+      model: claude-opus-4-7
+    secrets:
+      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+`mcp__github_inline_comment__create_inline_comment` in the example only works
+if that MCP server is available to the run; drop it if you aren't using it.
+
+#### What `allowed_tools` does and does not do
+
+**It is additive.** Verified against `claude-code-action` v1.0.193: in tag mode
+(what this workflow runs) the action emits its own
+`--allowedTools "<tag mode tools>"` and appends your `claude_args` after it,
+and its parser treats `--allowedTools`/`--allowed-tools` as aliases and
+**unions** every occurrence rather than letting the last win.
+
+So `allowed_tools` can only **grant** tools on top of the action's baseline —
+it cannot revoke anything the action grants itself. It restores the ability to
+express a per-repo tool policy without inlining the action, and it keeps that
+policy visible in the caller stub, but do not read it as a hard sandbox.
+Revoking a tool requires `--disallowed-tools`, which this workflow does not yet
+expose; open an issue if you need it.
+
+Both inputs are validated before use. `model` must match
+`[a-zA-Z0-9._-]+`; `allowed_tools` is passed via `env:` (never interpolated
+into a `run:` line) and rejects quotes, backticks, `$`, `;`, `&`, `|`,
+backslashes, and newlines, so a caller cannot break out of the generated
+command line. Spaces are permitted because tool specs need them
+(`Bash(gh pr view:*)`), which is why the generated argument stays quoted.
+
+There is deliberately **no free-form `claude_args` passthrough**: an opaque
+arg blob would let a caller pass flags that *widen* permissions, which is the
+opposite of what an allowlist is for. Discrete inputs keep the surface
+auditable from the caller stub.
+
 ### Security note
 
 The `author_association` guard in the `if:` condition **must stay in the caller**

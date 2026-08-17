@@ -32,7 +32,13 @@ permissions:
 
 jobs:
   claude-review:
-    uses: smartwatermelon/github-workflows/.github/workflows/claude-blocking-review.yml@v3.0.0
+    # Floating @v3, not an exact @v3.x.y pin. Exact pins are immutable, so a
+    # caller pinned to one silently opts out of every security fix published
+    # afterwards — that is how ~19 smartwatermelon repos kept resolving to a
+    # claude-code-action vulnerable to GHSA-8q5r-mmjf-575q. This template
+    # previously carried @v3.0.0 and would have deployed that same defect
+    # across every NightOwl repo it touched.
+    uses: smartwatermelon/github-workflows/.github/workflows/claude-blocking-review.yml@v3
     with:
       pr_number: ${{ github.event.pull_request.number }}
     secrets:
@@ -115,14 +121,39 @@ restore_repo() {
   fi
 
   # Fresh path: clone, branch, write file, commit, push, PR, auto-merge
+  #
+  # Guard before the rm: `set -u` catches an *unset* variable but not an
+  # *empty* one, and ALL_REPOS is built from command output (see the
+  # empty-element check at the top). An empty $repo would make clone
+  # "${WORK_DIR}/" and this rm would wipe the whole work dir instead of one
+  # clone. Refuse rather than delete a path we did not intend to build.
+  if [[ -z "${WORK_DIR:-}" || -z "${repo:-}" ]]; then
+    echo "  FATAL: refusing to remove clone dir — WORK_DIR or repo is empty" >&2
+    return 1
+  fi
+  # Reject any repo name that is not a single plain path segment. A textual
+  # "starts with $WORK_DIR/" check is not enough: "../escape" satisfies it
+  # while resolving outside the work dir entirely. GitHub repo names are
+  # limited to [A-Za-z0-9._-], so anything else is either a bug upstream or
+  # an attempt to traverse.
+  if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+$ || "$repo" == "." || "$repo" == ".." ]]; then
+    echo "  FATAL: refusing to remove clone dir — unsafe repo name '${repo}'" >&2
+    return 1
+  fi
   clone="${WORK_DIR}/${repo}"
-  rm -rf "$clone"
+  rm -rf -- "$clone"
   git clone --depth=1 "git@github.com:${ORG}/${repo}.git" "$clone" --quiet
   git -C "$clone" checkout -b "$BRANCH" --quiet
   mkdir -p "${clone}/.github/workflows"
   printf '%s\n' "$WORKFLOW_CONTENT" >"${clone}/.github/workflows/claude-blocking-review.yml"
   git -C "$clone" add .github/workflows/claude-blocking-review.yml
-  git -C "$clone" commit --no-verify --quiet -m "chore: restore claude-blocking-review caller
+  # Commit normally — hooks are NOT bypassed here. This previously passed a
+  # verify-skipping flag, which the repo's own policy forbids and which
+  # silently disabled any commit hooks the target repo installs. The content
+  # is a fixed template, so there is nothing a hook would legitimately need
+  # to reject; if one does reject it, that is signal worth seeing rather
+  # than suppressing.
+  git -C "$clone" commit --quiet -m "chore: restore claude-blocking-review caller
 
 Restoring per-repo blocking-review caller after the org ruleset rollout was
 paused. Until the ruleset's workflow firing behavior is validated, the per-repo

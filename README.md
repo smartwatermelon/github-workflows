@@ -116,16 +116,18 @@ on:
       - 'docs/**'
 
 jobs:
-  # Pin to v3.1.0 or later, not a caller-level `if: github.actor !=
-  # 'dependabot[bot]'` gate. A job-level `if:` that evaluates false means
-  # this job never dispatches, so a required status check on it never
-  # reports — it stays permanently pending on Dependabot PRs under
-  # branch protection that requires the check, blocking auto-merge
-  # entirely. v3.1.0+ instead skips Dependabot PRs from INSIDE the job
-  # (see this file's own "Check for Dependabot PR" step below), so the
-  # job still runs and reports a real PASS. See
-  # smartwatermelon/github-workflows#115/#117 for the incident that
-  # established this; a caller-level gate was tried and reverted.
+  # Do NOT add a caller-level `if: github.actor != 'dependabot[bot]'` gate.
+  # A job-level `if:` that evaluates false means this job never dispatches,
+  # so a required status check on it never reports — it stays permanently
+  # pending on Dependabot PRs under branch protection that requires the
+  # check, blocking auto-merge entirely. The reusable workflow instead
+  # skips Dependabot PRs from INSIDE the job (see its own "Check for
+  # Dependabot PR" step), so the job still runs and reports a real PASS.
+  # `@v3` already resolves to a commit that contains that in-job skip, so
+  # tracking the floating tag is all you need — there is no version floor
+  # to enforce yourself. See smartwatermelon/github-workflows#115/#117 for
+  # the incident that established this; a caller-level gate was tried and
+  # reverted.
   claude-review:
     # Replace YOUR_ORG with smartwatermelon, or your fork's org, before use.
     # Track floating @v3, not an exact @v3.x.y — see "Versioning" below.
@@ -251,8 +253,10 @@ mistake of cutting one and not the other. So:
 
 - **`v1` is frozen** at `v1.2.6` and will not be updated further.
 - **Point every caller at the `v3` line**, including `claude-assistant.yml`
-  callers. `claude-assistant.yml@v3.1.2` is correct and current.
-- If you are still on `@v1` or `@v1.2.x`, move to `@v3.1.2`. There is no
+  callers. The floating `@v3` tag is the recommended ref for both the
+  blocking-review and assistant callers — see "Prefer floating `@v3` over an
+  exact pin" above; that guidance is not scoped to one workflow.
+- If you are still on `@v1` or `@v1.2.x`, move to `@v3`. There is no
   interface change — the files are identical at equivalent commits.
 
 Note `dependabot-auto-merge` uses a **prefixed** namespace
@@ -406,8 +410,8 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
     # The v3 line, not v1: tags here are repo-wide, and v1 is frozen/deprecated.
-    # See "The v1 line is deprecated" under Versioning above.
-    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3.1.2
+    # Track floating @v3, not an exact @v3.x.y — see "Versioning" above.
+    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3
     secrets:
       claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -418,11 +422,12 @@ Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
 
 | Input | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
-| `allowed_tools` | string | `''` | Tool allowlist passed as `--allowed-tools`. Empty = action default policy. |
+| `allowed_tools` | string | `''` | Tool allowlist passed as `--allowed-tools`. Additive — see below. Empty = action default policy. |
+| `disallowed_tools` | string | `''` | Tool denylist passed as `--disallowed-tools`. Genuinely revokes. Empty = no denylist. |
 | `model` | string | `''` | Model ID passed as `--model`. Empty = action default model. |
 
-Both are optional. With both empty the workflow passes no `claude_args` at
-all, so behavior is identical to a caller that sets neither.
+All three are optional. With all three empty the workflow passes no
+`claude_args` at all, so behavior is identical to a caller that sets none.
 
 #### Restricting tools (recommended)
 
@@ -438,7 +443,7 @@ files in its checkout, so those are in scope — but grants only **read-only
 Read the additive-semantics note below before treating that as a guarantee:
 
 ```yaml
-    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3.1.2
+    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3
     with:
       allowed_tools: 'Read,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment'
       model: claude-opus-4-7
@@ -461,15 +466,29 @@ So `allowed_tools` can only **grant** tools on top of the action's baseline —
 it cannot revoke anything the action grants itself. It restores the ability to
 express a per-repo tool policy without inlining the action, and it keeps that
 policy visible in the caller stub, but do not read it as a hard sandbox.
-Revoking a tool requires `--disallowed-tools`, which this workflow does not yet
-expose; open an issue if you need it.
 
-Both inputs are validated before use. `model` must match
-`[a-zA-Z0-9._-]+`; `allowed_tools` is passed via `env:` (never interpolated
-into a `run:` line) and rejects quotes, backticks, `$`, `;`, `&`, `|`,
-backslashes, and newlines, so a caller cannot break out of the generated
-command line. Spaces are permitted because tool specs need them
-(`Bash(gh pr view:*)`), which is why the generated argument stays quoted.
+#### Revoking a tool: `disallowed_tools`
+
+Use `disallowed_tools` when you need an actual restriction. It emits
+`--disallowed-tools`, a real Claude Code CLI flag that `claude_args` passes
+through to. The deny list is applied to the resolved tool set, so it subtracts
+from the action's own tag-mode baseline as well as from anything
+`allowed_tools` added — a spec named in both is denied.
+
+```yaml
+    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3
+    with:
+      disallowed_tools: 'Bash(git push:*),Bash(gh pr merge:*),WebFetch'
+    secrets:
+      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+All three inputs are validated before use. `model` must match
+`[a-zA-Z0-9._-]+`; `allowed_tools` and `disallowed_tools` are passed via `env:`
+(never interpolated into a `run:` line) and reject quotes, backticks, `$`, `;`,
+`&`, `|`, backslashes, and newlines, so a caller cannot break out of the
+generated command line. Spaces are permitted because tool specs need them
+(`Bash(gh pr view:*)`), which is why the generated arguments stay quoted.
 
 There is deliberately **no free-form `claude_args` passthrough**: an opaque
 arg blob would let a caller pass flags that *widen* permissions, which is the

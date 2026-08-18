@@ -21,7 +21,7 @@ name: Claude Code Assistant
 #       secrets:
 #         claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 #
-# Optional per-repo customization (both inputs default to empty, which
+# Optional per-repo customization (all inputs default to empty, which
 # reproduces the action's own defaults exactly):
 #
 #       with:
@@ -30,6 +30,9 @@ name: Claude Code Assistant
 #         # variants (git push/reset/checkout/clean, gh pr merge) are never
 #         # granted by this repo. See the additive-semantics note below.
 #         allowed_tools: 'Read,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*)'
+#         # Revoke tools the action's own baseline would otherwise grant.
+#         # This is the only input that genuinely subtracts — see below.
+#         disallowed_tools: 'Bash(git push:*),Bash(gh pr merge:*),WebFetch'
 #         model: 'claude-opus-4-7'
 #
 # Deliberately NOT a free-form `claude_args` passthrough: an opaque arg blob
@@ -45,12 +48,17 @@ name: Claude Code Assistant
 # `--allowedTools` and `--allowed-tools` as aliases and UNIONS every
 # occurrence (`new Set([...])`), rather than letting the last one win.
 #
-# So this input can only ever GRANT tools on top of the action's tag-mode
-# baseline — it cannot revoke anything the action grants itself. Use it to
-# add the specific tools a repo needs (and to pin `model`); do not read it as
-# a hard sandbox. Genuinely revoking a tool needs `--disallowed-tools`, which
-# this workflow does not yet expose; if you need that, open an issue rather
-# than assuming an allowlist here has removed something.
+# So that input can only ever GRANT tools on top of the action's tag-mode
+# baseline — it cannot revoke anything the action grants itself. Do not read
+# `allowed_tools` as a hard sandbox.
+#
+# To genuinely REVOKE a tool, use `disallowed_tools`, which emits
+# `--disallowed-tools` (a real Claude Code CLI flag; claude_args is passed
+# through to that CLI). A deny entry is evaluated against the resolved tool
+# set, so it subtracts from the action's tag-mode baseline as well as from
+# anything `allowed_tools` added — a spec listed in both is denied. That is
+# the input to reach for when a repo needs an actual restriction rather than
+# an addition (see #146).
 
 on:
   workflow_call:
@@ -61,6 +69,16 @@ on:
           --allowed-tools. Empty (default) = the action's default tool policy.
           NOTE: this UNIONS with the action's own tag-mode tool set, it does
           not replace it — see the note in the header comment.
+        type: string
+        required: false
+        default: ''
+      disallowed_tools:
+        description: |
+          Comma-separated tool denylist passed to claude-code-action as
+          --disallowed-tools. Empty (default) = no denylist.
+          Unlike allowed_tools this genuinely SUBTRACTS: it is evaluated
+          against the resolved tool set, so it can revoke tools the action's
+          own tag-mode baseline grants.
         type: string
         required: false
         default: ''
@@ -100,9 +118,10 @@ jobs:
         id: args
         env:
           ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
+          DISALLOWED_TOOLS: ${{ inputs.disallowed_tools }}
           MODEL: ${{ inputs.model }}
         run: |
-          # Both inputs are consumed via env: (never interpolated directly
+          # All inputs are consumed via env: (never interpolated directly
           # into this run: block) so a caller cannot inject shell through
           # them. The validation below is defence-in-depth on top of that:
           # the assembled string is handed to claude-code-action, which
@@ -114,7 +133,7 @@ jobs:
           # hyphens. Same pattern and error style as claude-blocking-review.yml.
           # NOTE on grep: `grep -qE '^…$'` matches PER LINE, so a multi-line
           # value could smuggle a bad line past an otherwise-anchored pattern.
-          # Both inputs are therefore newline-checked before the charset check,
+          # All inputs are therefore newline-checked before the charset check,
           # using parameter expansion against a literal newline (no subshell).
           NL=$'\n'
           if [ -n "$MODEL" ]; then
@@ -169,16 +188,41 @@ jobs:
             fi
           fi
 
-          # Assemble claude_args. When BOTH inputs are empty the output is the
+          # Validate disallowed_tools. Same threat model, same permitted
+          # class, and the same newline-before-charset ordering as
+          # allowed_tools above — the value lands in the same generated
+          # command line and is quoted for the same reason (specs contain
+          # spaces).
+          if [ -n "$DISALLOWED_TOOLS" ]; then
+            if [ "${DISALLOWED_TOOLS%%"$NL"*}" != "$DISALLOWED_TOOLS" ]; then
+              echo "::error::disallowed_tools must not contain newlines."
+              exit 1
+            fi
+            if ! printf '%s' "$DISALLOWED_TOOLS" | grep -qE '^[a-zA-Z0-9_,:*()./ -]+$'; then
+              echo "::error::disallowed_tools contains disallowed characters."
+              echo "::error::Allowed: letters, digits, and _ , : * ( ) . / space -"
+              echo "::error::Rejected (shell-injection vectors): quotes, backticks, \$, ;, &, |, backslashes, newlines."
+              echo "::error::Example: 'Bash(git push:*),Bash(gh pr merge:*)'"
+              exit 1
+            fi
+          fi
+
+          # Assemble claude_args. When ALL inputs are empty the output is the
           # empty string, and claude-code-action's claude_args default is also
           # the empty string — so the default path is unchanged from before
           # these inputs existed.
           CLAUDE_ARGS=""
           if [ -n "$MODEL" ]; then
-            CLAUDE_ARGS="--model $MODEL"
+            # Quoted for consistency with the tool lists below. The charset
+            # validation already excludes whitespace, so this is defensive
+            # against future charset drift rather than a live fix (see #144).
+            CLAUDE_ARGS="--model \"$MODEL\""
           fi
           if [ -n "$ALLOWED_TOOLS" ]; then
             CLAUDE_ARGS="${CLAUDE_ARGS:+$CLAUDE_ARGS }--allowed-tools \"$ALLOWED_TOOLS\""
+          fi
+          if [ -n "$DISALLOWED_TOOLS" ]; then
+            CLAUDE_ARGS="${CLAUDE_ARGS:+$CLAUDE_ARGS }--disallowed-tools \"$DISALLOWED_TOOLS\""
           fi
 
           echo "claude_args=$CLAUDE_ARGS" >> "$GITHUB_OUTPUT"
@@ -237,8 +281,8 @@ jobs:
           # performs the instructions in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
 
-          # Built from the `allowed_tools` / `model` workflow_call inputs by
-          # the "Validate inputs and build claude_args" step above. Empty when
-          # neither input is set, which is exactly what the action receives by
-          # default — see #141.
+          # Built from the `allowed_tools` / `disallowed_tools` / `model`
+          # workflow_call inputs by the "Validate inputs and build claude_args"
+          # step above. Empty when none of them is set, which is exactly what
+          # the action receives by default — see #141, #146.
           claude_args: ${{ steps.args.outputs.claude_args }}

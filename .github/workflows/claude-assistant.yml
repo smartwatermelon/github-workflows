@@ -31,7 +31,7 @@ name: Claude Code Assistant
 #         # granted by this repo. See the additive-semantics note below.
 #         allowed_tools: 'Read,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*)'
 #         # Revoke tools the action's own baseline would otherwise grant.
-#         # This is the only input that genuinely subtracts — see below.
+#         # Intended as the revoking input, but see the caveat below.
 #         disallowed_tools: 'Bash(git push:*),Bash(gh pr merge:*),WebFetch'
 #         model: 'claude-opus-4-7'
 #
@@ -55,10 +55,11 @@ name: Claude Code Assistant
 # To genuinely REVOKE a tool, use `disallowed_tools`, which emits
 # `--disallowed-tools` (a real Claude Code CLI flag; claude_args is passed
 # through to that CLI). A deny entry is evaluated against the resolved tool
-# set, so it subtracts from the action's tag-mode baseline as well as from
-# anything `allowed_tools` added — a spec listed in both is denied. That is
-# the input to reach for when a repo needs an actual restriction rather than
-# an addition (see #146).
+# set, and is EXPECTED to subtract from the action's tag-mode baseline as
+# well as from anything `allowed_tools` added. NOTE: that precedence is not
+# verified here — unlike the additive behavior of `allowed_tools`, which was
+# confirmed against v1.0.193 source. Treat it as unproven until a live run
+# confirms it (see #146).
 
 on:
   workflow_call:
@@ -76,9 +77,9 @@ on:
         description: |
           Comma-separated tool denylist passed to claude-code-action as
           --disallowed-tools. Empty (default) = no denylist.
-          Unlike allowed_tools this genuinely SUBTRACTS: it is evaluated
-          against the resolved tool set, so it can revoke tools the action's
-          own tag-mode baseline grants.
+          Intended to SUBTRACT from the resolved tool set, unlike the
+          additive allowed_tools. Precedence against the action's own
+          tag-mode baseline is unverified — confirm with a live run.
         type: string
         required: false
         default: ''

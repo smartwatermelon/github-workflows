@@ -423,7 +423,7 @@ Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
 | Input | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `allowed_tools` | string | `''` | Tool allowlist passed as `--allowed-tools`. Additive — see below. Empty = action default policy. |
-| `disallowed_tools` | string | `''` | Tool denylist passed as `--disallowed-tools`. Genuinely revokes. Empty = no denylist. |
+| `disallowed_tools` | string | `''` | Tool denylist passed as `--disallowed-tools`. Intended to revoke, but precedence is unverified — see below. Empty = no denylist. |
 | `model` | string | `''` | Model ID passed as `--model`. Empty = action default model. |
 
 All three are optional. With all three empty the workflow passes no
@@ -471,9 +471,16 @@ policy visible in the caller stub, but do not read it as a hard sandbox.
 
 Use `disallowed_tools` when you need an actual restriction. It emits
 `--disallowed-tools`, a real Claude Code CLI flag that `claude_args` passes
-through to. The deny list is applied to the resolved tool set, so it subtracts
-from the action's own tag-mode baseline as well as from anything
-`allowed_tools` added — a spec named in both is denied.
+through to.
+
+**Verify the effect before relying on it.** Unlike `allowed_tools` — whose
+additive behavior was confirmed by reading `claude-code-action` v1.0.193
+source — the precedence of `--disallowed-tools` against the tool set the
+action emits for itself in tag mode has *not* been verified here. A deny
+list is expected to subtract from the resolved set, but that expectation is
+exactly the kind of assumption that proved wrong for `allowed_tools`, which
+turned out to union rather than replace. Confirm with a live `@claude` run
+in a repo that sets this input, and treat it as unproven until you have.
 
 ```yaml
     uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3

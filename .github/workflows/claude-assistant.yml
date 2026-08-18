@@ -54,12 +54,23 @@ name: Claude Code Assistant
 #
 # To genuinely REVOKE a tool, use `disallowed_tools`, which emits
 # `--disallowed-tools` (a real Claude Code CLI flag; claude_args is passed
-# through to that CLI). A deny entry is evaluated against the resolved tool
-# set, and is EXPECTED to subtract from the action's tag-mode baseline as
-# well as from anything `allowed_tools` added. NOTE: that precedence is not
-# verified here — unlike the additive behavior of `allowed_tools`, which was
-# confirmed against v1.0.193 source. Treat it as unproven until a live run
-# confirms it (see #146).
+# through to that CLI). VERIFIED against claude-code-action v1.0.193 (the
+# SHA pinned below), by the same source-reading method used for
+# `allowed_tools`:
+#   - src/modes/tag/index.ts:186 emits ONLY `--allowedTools`. Grepping the
+#     action for `disallowedTools` finds 0 occurrences in tag mode and 0 in
+#     agent mode, so nothing upstream emits a denylist to compete with ours.
+#     This is why `disallowed_tools` does not repeat the `allowed_tools`
+#     surprise: that input could only ever ADD because tag mode emits its
+#     own allowlist and the parser unions. There is no such counterpart here.
+#   - base-action/src/parse-sdk-options.ts:245-266 merges our value (both
+#     `--disallowedTools` and `--disallowed-tools` spellings) and :321-322
+#     sets it on the SDK options object, deleting it from extraArgs so it is
+#     passed as a first-class option rather than an opaque arg.
+# Not established here: the SDK's internal deny-beats-allow rule for a tool
+# named in BOTH lists. That is Claude Code CLI behavior, outside this action,
+# and unreachable via this input alone — tag mode emits no denylist, so it
+# takes a caller contradicting its own two inputs to reach that case. See #146.
 
 on:
   workflow_call:
@@ -77,9 +88,10 @@ on:
         description: |
           Comma-separated tool denylist passed to claude-code-action as
           --disallowed-tools. Empty (default) = no denylist.
-          Intended to SUBTRACT from the resolved tool set, unlike the
-          additive allowed_tools. Precedence against the action's own
-          tag-mode baseline is unverified — confirm with a live run.
+          SUBTRACTS from the resolved tool set, unlike the additive
+          allowed_tools. Verified against claude-code-action v1.0.193:
+          tag mode emits no denylist of its own, so this is the only
+          --disallowed-tools in play. See the header comment and #146.
         type: string
         required: false
         default: ''

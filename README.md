@@ -423,7 +423,7 @@ Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
 | Input | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `allowed_tools` | string | `''` | Tool allowlist passed as `--allowed-tools`. Additive — see below. Empty = action default policy. |
-| `disallowed_tools` | string | `''` | Tool denylist passed as `--disallowed-tools`. Intended to revoke, but precedence is unverified — see below. Empty = no denylist. |
+| `disallowed_tools` | string | `''` | Tool denylist passed as `--disallowed-tools`. Genuinely revokes — see below. Empty = no denylist. |
 | `model` | string | `''` | Model ID passed as `--model`. Empty = action default model. |
 
 All three are optional. With all three empty the workflow passes no
@@ -473,14 +473,27 @@ Use `disallowed_tools` when you need an actual restriction. It emits
 `--disallowed-tools`, a real Claude Code CLI flag that `claude_args` passes
 through to.
 
-**Verify the effect before relying on it.** Unlike `allowed_tools` — whose
-additive behavior was confirmed by reading `claude-code-action` v1.0.193
-source — the precedence of `--disallowed-tools` against the tool set the
-action emits for itself in tag mode has *not* been verified here. A deny
-list is expected to subtract from the resolved set, but that expectation is
-exactly the kind of assumption that proved wrong for `allowed_tools`, which
-turned out to union rather than replace. Confirm with a live `@claude` run
-in a repo that sets this input, and treat it as unproven until you have.
+**Verified against `claude-code-action` v1.0.193**, the SHA this workflow
+pins, using the same source-reading method that established `allowed_tools`
+is additive:
+
+- `src/modes/tag/index.ts:186` emits **only** `--allowedTools`. Grepping the
+  action for `disallowedTools` finds **zero** occurrences in tag mode and zero
+  in agent mode — nothing upstream emits a denylist for yours to compete with.
+- `base-action/src/parse-sdk-options.ts:245-266` merges your value (accepting
+  both `--disallowedTools` and `--disallowed-tools` spellings), and `:321-322`
+  sets it on the SDK options object rather than leaving it in `extraArgs`.
+
+This is why `disallowed_tools` does not repeat the `allowed_tools` surprise.
+That input can only ever *add* because tag mode emits its own allowlist and
+the parser unions the two. The denylist has no such counterpart.
+
+One thing this trace does **not** establish: the SDK's internal precedence
+when a tool is named in both the allow and deny lists. That is Claude Code
+CLI behavior, outside this action — and you cannot reach it through this
+input alone, since tag mode emits no denylist. It takes a caller listing the
+same tool in both of its own inputs, which is a self-contradictory config
+rather than the revocation path this input exists for.
 
 ```yaml
     uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3

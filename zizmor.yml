@@ -80,8 +80,16 @@ rules:
   # Scoped to the three standard caller filenames only. A repo's own
   # workflows are still audited normally — if `validate.yml` or `release.yml`
   # asks for more than it needs, that finding still fires.
+  #
+  # These match on FILENAME, not on which reusable workflow is called, so the
+  # coupling is by naming convention. Note especially that `claude.yml` is the
+  # caller for `claude-assistant.yml` — the names differ, which is easy to
+  # misread as an omission. A consumer who names a caller anything else (say
+  # `claude-assistant-caller.yml`) gets excessive-permissions findings with no
+  # explanation; the fix is to rename the caller to the standard filename, or
+  # to add the local name here. See #142 and the README's zizmor section.
   excessive-permissions:
     ignore:
-      - claude-blocking-review.yml
-      - claude.yml
-      - dependabot-auto-merge.yml
+      - claude-blocking-review.yml # caller for claude-blocking-review.yml
+      - claude.yml # caller for claude-assistant.yml
+      - dependabot-auto-merge.yml # caller for dependabot-auto-merge.yml

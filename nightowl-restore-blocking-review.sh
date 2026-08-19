@@ -50,10 +50,23 @@ mkdir -p "$WORK_DIR"
 # Enumerate active NightOwl repos dynamically (excludes archived, .github,
 # and any repo in .claude-review-ignore). Using dynamic discovery so a repo
 # added in the last hours isn't silently skipped.
+# Declare before mapfile so the array exists unconditionally, matching the
+# ALL_REPOS handling below. mapfile does declare an empty array even when its
+# input is empty (verified), so this is belt-and-braces rather than a fix for
+# a live unbound-variable path -- but it makes the invariant independent of
+# that bash subtlety, which is what the loop below relies on under `set -u`.
+IGNORED=()
 mapfile -t IGNORED < <(grep -v '^#' "$IGNORE_FILE" 2>/dev/null | grep -v '^$' || true)
 is_ignored() {
   local repo="$1"
-  for i in "${IGNORED[@]:-}"; do
+  # Return early rather than looping over "${IGNORED[@]:-}": on an empty array
+  # that expands to a single empty string, not to nothing, so the loop ran one
+  # spurious iteration with i="". Never a false positive (no repo is named "")
+  # but wrong, and the `:-` obscured that the array is always set. See #139.
+  if [[ ${#IGNORED[@]} -eq 0 ]]; then
+    return 1
+  fi
+  for i in "${IGNORED[@]}"; do
     [[ "$i" == "${ORG}/${repo}" ]] && return 0
   done
   return 1

@@ -230,6 +230,19 @@ The config encodes two documented policy decisions and nothing else:
 | `unpinned-uses` | `ref-pin` for `smartwatermelon/github-workflows/*`, strict `hash-pin` for everything else | Reflects the two-class policy above. Third-party findings stay visible. |
 | `excessive-permissions` | ignored for the three standard caller filenames | Those blocks are required by the reusable workflows; removing them causes `startup_failure`, not a narrower blast radius. |
 
+The `excessive-permissions` ignore list matches on **caller filename**, not on
+which reusable workflow the caller invokes. Use the standard names:
+
+| Caller filename | Calls |
+| --- | --- |
+| `claude-blocking-review.yml` | `claude-blocking-review.yml` |
+| `claude.yml` | `claude-assistant.yml` (note: the names differ) |
+| `dependabot-auto-merge.yml` | `dependabot-auto-merge.yml` |
+
+Name a caller anything else and zizmor reports `excessive-permissions` against
+it with no indication why. Either rename it to the standard filename or add
+your local name to the `ignore:` list in your copy of `zizmor.yml`.
+
 It is deliberately **not** a blanket mute. On a representative consumer it takes
 findings from 9 high to 2 — and the 2 that survive are genuine third-party
 actions pinned to floating majors in that repo's own workflows, which is a real

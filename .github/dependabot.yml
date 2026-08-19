@@ -18,3 +18,11 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore"
+    # Default is 5. Only 3 actions are tracked here today, so the cap is not
+    # currently reachable — this is headroom, not a fix for a live problem.
+    # It costs nothing, and the failure mode it forecloses is the one this
+    # file exists to prevent: a capped run queues the remaining bumps until
+    # next week, delaying a security fix in whatever got cut. Being upstream
+    # of ~30 repos is the same reason `cooldown` is omitted above — bumps
+    # here should not wait. See #127.
+    open-pull-requests-limit: 10

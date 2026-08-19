@@ -1,6 +1,12 @@
 # Centralize Claude Assistant Workflow
 
 > **Status: COMPLETE** — All tasks done as of 2026-03-09. See "Post-deployment fixes" below for lessons learned.
+>
+> **Historical document.** Code snippets below are point-in-time records of what
+> was built in March 2026, not current configuration. Pinned action SHAs in
+> particular are deliberately NOT updated as Dependabot bumps them — the live
+> pins are in `.github/workflows/`, which is the only place to read them from.
+> See #124.
 
 **Goal:** Extract the Claude Code Action invocation into a reusable `workflow_call` workflow so all 10 repos share one implementation, keeping the security-critical `author_association` guard as a thin per-repo caller.
 

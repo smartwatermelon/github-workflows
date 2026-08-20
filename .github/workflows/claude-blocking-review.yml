@@ -679,8 +679,11 @@ jobs:
           # from these three vars; a bare steps.claude-review.outcome would
           # misreport a successful retry as a failure.
           CLAUDE_OUTCOME_FIRST: ${{ steps.claude-review.outcome }}
-          # '' when no retry ran (probe said the API was fine, or the first
-          # attempt did not fail at all); otherwise 'success'/'failure'.
+          # '' when no retry ran — three distinct paths: the probe ran and
+          # said the API was fine; the first attempt succeeded, so the probe
+          # never ran; or the first attempt was itself skipped (doc-only /
+          # Dependabot), so the probe never ran and this is 'skipped' rather
+          # than a failure. Otherwise 'success'/'failure' (see #155).
           CLAUDE_OUTCOME_RETRY: ${{ steps.claude-review-retry.outcome }}
           INFRA_DOWN: ${{ steps.infra-probe.outputs.infra_down }}
           DOC_SKIP: ${{ steps.doc-check.outputs.skip }}

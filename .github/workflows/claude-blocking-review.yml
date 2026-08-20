@@ -134,6 +134,140 @@ jobs:
       issues: write
       id-token: write  # required by claude-code-action for internal authentication
 
+    # Hoisted to job level (#133) so the original review step and the
+    # infrastructure-retry step share ONE copy of the prompt. Two divergent
+    # inline copies of a ~120-line review contract is a real maintenance
+    # hazard: an edit applied to one attempt but not the other would make a
+    # retried review silently enforce different criteria than the first.
+    #
+    # Job-level `env:` cannot reference `steps.*`. Verified safe: the prompt
+    # body's only expressions are github.repository, inputs.pr_number,
+    # inputs.extra_instructions, github.event.pull_request.head.sha ||
+    # github.sha, and github.run_id — all `github.*`/`inputs.*`, all of which
+    # ARE available in job-level env.
+    #
+    # `claude_args` is deliberately NOT hoisted: it references
+    # steps.estimate.outputs.model, which job-level env cannot see. It stays
+    # inline and is repeated verbatim in both attempts (one line).
+    env:
+      REVIEW_PROMPT: |
+        REPO: ${{ github.repository }}
+        PR NUMBER: ${{ inputs.pr_number }}
+
+        You are a BLOCK/PASS gate, not a full code reviewer. Local
+        reviewers (pre-commit hooks, code-reviewer, adversarial-reviewer,
+        linters, test suites) already cover style, naming, organization,
+        test coverage, and documentation. Do NOT duplicate that work —
+        it costs money and dilutes the signal of a real BLOCK.
+
+        SCOPE CONSTRAINTS — follow these strictly. v3 dropped the
+        artificial --max-turns cap, so YOU are the soft constraint
+        keeping the review efficient. The wall-clock timeout is the
+        only hard backstop, and burning it on exploration costs
+        real subscription quota for no signal.
+
+        - Read the PR diff with `gh pr diff` — that's your primary input
+        - Read a changed file ONLY when you need execution-path context
+          to confirm a specific BLOCK hypothesis — never for "general
+          context", style check, or to prove a hunch you can already
+          answer from the diff alone
+        - Hard ceiling: if confirming a single hypothesis would require
+          reading more than 3 files, stop and either downgrade to PASS
+          with a named observation or BLOCK based on the evidence you
+          already have. Do not chase a fourth file.
+        - Do NOT read CLAUDE.md, README, or any doc — they describe
+          style and conventions, which are not in scope
+        - Do NOT explore the broader codebase, run tests, or investigate
+          unrelated files
+        - Complete your review in as few turns as possible. A tight
+          PASS is a successful review; a thorough BLOCK is a successful
+          review; a meandering exploration that runs out of wall-clock
+          is a wasted review.
+
+        Check the diff for these BLOCK criteria ONLY:
+        - A clear bug that causes incorrect behavior in production
+          (wrong calculation, incorrect condition, off-by-one affecting
+          real data)
+        - A reliability regression: a previously working feature or
+          pipeline path may now fail because of changes in this PR
+        - A security vulnerability: hardcoded credentials, unvalidated
+          user input reaching a privileged operation, or an auth check
+          that can be bypassed
+        - Missing error handling on an async operation that would cause
+          a silent failure or a raw exception surfaced to the user
+        - A risk of data loss or data corruption
+
+        If you find none of the above → VERDICT: PASS. Keep the review
+        body short (≤5 lines is fine). Do NOT list style, naming,
+        organization, or coverage observations — the local reviewers
+        already caught or passed on those. Non-blocking observations
+        here are noise that dilutes the PASS/BLOCK signal.
+
+        If you find a BLOCK → cite file:line for each concern and
+        explain the failure mode in one or two sentences. Evidence
+        standard below is non-negotiable for reliability regressions.
+
+        ${{ inputs.extra_instructions != '' && format('---\n\nAdditional instructions for this repository:\n\n{0}', inputs.extra_instructions) || '' }}
+
+        ---
+
+        EVIDENCE STANDARD FOR RELIABILITY REGRESSION BLOCKs:
+
+        You cannot run the test suite. When claiming a test will fail or a code
+        path will regress, you must trace the execution path from entry point to
+        the specific assertion or failure point, with line-number citations at each
+        step. If your trace relies on assumed execution order you have not verified
+        in the diff or source, downgrade to PASS with a named observation instead.
+
+          ❌ "validateEntitlements() is now called before CLAUDE_API_KEY is checked,
+             so the 503 test will fail." → Requires verifying actual call order. If
+             you cannot cite the lines proving that order, issue PASS.
+
+          ✓ "Line 42 calls foo(), which at line 71 sets X to null; the assertion at
+             line 265 expects X to be non-null — that assertion will fail." → BLOCK.
+
+          ✓ "The test fixture at line 48 does not set REVENUECAT_API_SECRET, but the
+             handler reads it at line 89 and returns early if absent — the test will
+             never reach the code path it claims to exercise." → BLOCK.
+
+        When uncertain between BLOCK and PASS, default to PASS.
+
+        You MUST complete ALL of the following steps in order. The verdict
+        file is written BEFORE the comment post so that if you run out of
+        turns or time during the comment post, CI still has a usable
+        verdict. Do not reorder these steps.
+
+        Step 1 — Write your review to /tmp/review.md
+
+        Step 2 — Append the machine-readable verdict as the last line of the review:
+          echo "" >> /tmp/review.md
+          echo "VERDICT: PASS" >> /tmp/review.md
+          # OR (if blocking issues found):
+          echo "VERDICT: BLOCK" >> /tmp/review.md
+
+        Step 3 — Write the verdict to the verdict file (PRIMARY signal for CI):
+          echo "VERDICT: PASS" > /tmp/review-verdict.txt
+          # OR:
+          echo "VERDICT: BLOCK" > /tmp/review-verdict.txt
+
+        Step 4 — Post the review as a PR comment. The body MUST begin with a
+        machine-readable marker line, then a blank line, then the review
+        content (which already ends with the VERDICT line from Step 2).
+        Run these three commands verbatim — do NOT omit or edit the marker:
+
+          printf '<!-- claude-blocking-review sha=%s run=%s -->\n\n' '${{ github.event.pull_request.head.sha || github.sha }}' '${{ github.run_id }}' > /tmp/review-final.md
+          cat /tmp/review.md >> /tmp/review-final.md
+          gh pr comment ${{ inputs.pr_number }} --body-file /tmp/review-final.md
+
+        The marker lets downstream tooling (status scrapers, the
+        "Minimize prior review comments" step on the next run) identify
+        reviews produced by this workflow and associate each one with
+        its reviewed commit. Omitting it breaks those consumers.
+
+        The verdict file (Step 3) is the primary signal read by CI. The
+        VERDICT line inside the posted comment (Step 2 / Step 4) is the
+        fallback. Both must match.
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -465,124 +599,73 @@ jobs:
           # repo for why `*` is discouraged.
           allowed_bots: "claude[bot],github-actions[bot],dependabot[bot]"
           claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
-          prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ inputs.pr_number }}
+          prompt: ${{ env.REVIEW_PROMPT }}
+          claude_args: '--model ${{ steps.estimate.outputs.model }} --allowed-tools "Read,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *),Bash(printf *)"'
 
-            You are a BLOCK/PASS gate, not a full code reviewer. Local
-            reviewers (pre-commit hooks, code-reviewer, adversarial-reviewer,
-            linters, test suites) already cover style, naming, organization,
-            test coverage, and documentation. Do NOT duplicate that work —
-            it costs money and dilutes the signal of a real BLOCK.
+      # --- #133: gated single retry on GitHub API outage ---
+      #
+      # claude-code-action retries its OIDC token exchange 3x but does NOT
+      # retry its actor permission check
+      # (GET /repos/{owner}/{repo}/collaborators/{actor}/permission). During
+      # the 2026-08-17 GitHub degradation that endpoint failed ~40% of calls,
+      # so one 503 there killed the review step and blocked merges fleet-wide
+      # on the 26 repos where this is the only required status check.
+      #
+      # This probe hits the SAME endpoint claude-code-action uses. It is a
+      # heuristic, not proof: it runs seconds after the failure, so a
+      # recovered API yields a false negative (infra_down=false) and we fall
+      # through to the normal terminal-failure path. It never converts a
+      # failure into a pass — it only decides whether ONE more attempt is
+      # worth a CI run. At ~40% endpoint failure, a single gated retry cuts
+      # outage-induced check failures from ~40% to ~16%, without burning an
+      # extra run on ordinary (non-infra) review failures.
+      - name: Probe GitHub API after review failure
+        id: infra-probe
+        if: always() && steps.claude-review.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" \
+               --jq '.permission' >/dev/null 2>&1; then
+            echo "GitHub API responded — this review failure is NOT an infrastructure outage."
+            echo "infra_down=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-            SCOPE CONSTRAINTS — follow these strictly. v3 dropped the
-            artificial --max-turns cap, so YOU are the soft constraint
-            keeping the review efficient. The wall-clock timeout is the
-            only hard backstop, and burning it on exploration costs
-            real subscription quota for no signal.
+          echo "::warning::GitHub API permission endpoint is failing — treating this review failure as infrastructure and retrying once (see #133)."
+          echo "infra_down=true" >> "$GITHUB_OUTPUT"
 
-            - Read the PR diff with `gh pr diff` — that's your primary input
-            - Read a changed file ONLY when you need execution-path context
-              to confirm a specific BLOCK hypothesis — never for "general
-              context", style check, or to prove a hunch you can already
-              answer from the diff alone
-            - Hard ceiling: if confirming a single hypothesis would require
-              reading more than 3 files, stop and either downgrade to PASS
-              with a named observation or BLOCK based on the evidence you
-              already have. Do not chase a fourth file.
-            - Do NOT read CLAUDE.md, README, or any doc — they describe
-              style and conventions, which are not in scope
-            - Do NOT explore the broader codebase, run tests, or investigate
-              unrelated files
-            - Complete your review in as few turns as possible. A tight
-              PASS is a successful review; a thorough BLOCK is a successful
-              review; a meandering exploration that runs out of wall-clock
-              is a wasted review.
+          # FAIL-CLOSED GUARD — do not remove.
+          # The first attempt may have written /tmp/review-verdict.txt
+          # (prompt Step 3) and then died before posting its comment, or died
+          # mid-review after an early write. If that file survived into a
+          # retry that ALSO failed, "Check review verdict" would read the
+          # stale verdict and exit 0 — an incomplete, failed review reported
+          # as a green required check. That is exactly the fail-open outcome
+          # this workflow exists to prevent, so clear it here: the retry must
+          # write its own verdict to produce one. "Minimize PASS review
+          # comment" reads the same file and is likewise correct to find it
+          # absent when no attempt ever completed.
+          if [ -f /tmp/review-verdict.txt ]; then
+            echo "Clearing verdict file left behind by the failed first attempt (fail-closed; #133)."
+            rm -f /tmp/review-verdict.txt
+          fi
 
-            Check the diff for these BLOCK criteria ONLY:
-            - A clear bug that causes incorrect behavior in production
-              (wrong calculation, incorrect condition, off-by-one affecting
-              real data)
-            - A reliability regression: a previously working feature or
-              pipeline path may now fail because of changes in this PR
-            - A security vulnerability: hardcoded credentials, unvalidated
-              user input reaching a privileged operation, or an auth check
-              that can be bypassed
-            - Missing error handling on an async operation that would cause
-              a silent failure or a raw exception surfaced to the user
-            - A risk of data loss or data corruption
-
-            If you find none of the above → VERDICT: PASS. Keep the review
-            body short (≤5 lines is fine). Do NOT list style, naming,
-            organization, or coverage observations — the local reviewers
-            already caught or passed on those. Non-blocking observations
-            here are noise that dilutes the PASS/BLOCK signal.
-
-            If you find a BLOCK → cite file:line for each concern and
-            explain the failure mode in one or two sentences. Evidence
-            standard below is non-negotiable for reliability regressions.
-
-            ${{ inputs.extra_instructions != '' && format('---\n\nAdditional instructions for this repository:\n\n{0}', inputs.extra_instructions) || '' }}
-
-            ---
-
-            EVIDENCE STANDARD FOR RELIABILITY REGRESSION BLOCKs:
-
-            You cannot run the test suite. When claiming a test will fail or a code
-            path will regress, you must trace the execution path from entry point to
-            the specific assertion or failure point, with line-number citations at each
-            step. If your trace relies on assumed execution order you have not verified
-            in the diff or source, downgrade to PASS with a named observation instead.
-
-              ❌ "validateEntitlements() is now called before CLAUDE_API_KEY is checked,
-                 so the 503 test will fail." → Requires verifying actual call order. If
-                 you cannot cite the lines proving that order, issue PASS.
-
-              ✓ "Line 42 calls foo(), which at line 71 sets X to null; the assertion at
-                 line 265 expects X to be non-null — that assertion will fail." → BLOCK.
-
-              ✓ "The test fixture at line 48 does not set REVENUECAT_API_SECRET, but the
-                 handler reads it at line 89 and returns early if absent — the test will
-                 never reach the code path it claims to exercise." → BLOCK.
-
-            When uncertain between BLOCK and PASS, default to PASS.
-
-            You MUST complete ALL of the following steps in order. The verdict
-            file is written BEFORE the comment post so that if you run out of
-            turns or time during the comment post, CI still has a usable
-            verdict. Do not reorder these steps.
-
-            Step 1 — Write your review to /tmp/review.md
-
-            Step 2 — Append the machine-readable verdict as the last line of the review:
-              echo "" >> /tmp/review.md
-              echo "VERDICT: PASS" >> /tmp/review.md
-              # OR (if blocking issues found):
-              echo "VERDICT: BLOCK" >> /tmp/review.md
-
-            Step 3 — Write the verdict to the verdict file (PRIMARY signal for CI):
-              echo "VERDICT: PASS" > /tmp/review-verdict.txt
-              # OR:
-              echo "VERDICT: BLOCK" > /tmp/review-verdict.txt
-
-            Step 4 — Post the review as a PR comment. The body MUST begin with a
-            machine-readable marker line, then a blank line, then the review
-            content (which already ends with the VERDICT line from Step 2).
-            Run these three commands verbatim — do NOT omit or edit the marker:
-
-              printf '<!-- claude-blocking-review sha=%s run=%s -->\n\n' '${{ github.event.pull_request.head.sha || github.sha }}' '${{ github.run_id }}' > /tmp/review-final.md
-              cat /tmp/review.md >> /tmp/review-final.md
-              gh pr comment ${{ inputs.pr_number }} --body-file /tmp/review-final.md
-
-            The marker lets downstream tooling (status scrapers, the
-            "Minimize prior review comments" step on the next run) identify
-            reviews produced by this workflow and associate each one with
-            its reviewed commit. Omitting it breaks those consumers.
-
-            The verdict file (Step 3) is the primary signal read by CI. The
-            VERDICT line inside the posted comment (Step 2 / Step 4) is the
-            fallback. Both must match.
-
+      # Second and FINAL attempt. Fires only when the probe above confirmed
+      # the GitHub API is currently unavailable, so ordinary review failures
+      # (timeout, agent error, a real BLOCK path that failed to render) still
+      # cost exactly one run. Inputs are identical to the first attempt:
+      # same pinned SHA, same hoisted prompt, same estimated timeout.
+      - name: Run Claude Code Review (infrastructure retry)
+        id: claude-review-retry
+        if: steps.infra-probe.outputs.infra_down == 'true'
+        timeout-minutes: ${{ fromJSON(steps.estimate.outputs.timeout_minutes) }}
+        continue-on-error: true  # the terminal decision belongs to "Check review verdict"
+        uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c  # v1.0.193
+        with:
+          allowed_bots: "claude[bot],github-actions[bot],dependabot[bot]"
+          claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
+          prompt: ${{ env.REVIEW_PROMPT }}
           claude_args: '--model ${{ steps.estimate.outputs.model }} --allowed-tools "Read,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(echo *),Bash(cat *),Bash(tee *),Bash(printf *)"'
 
       - name: Check review verdict
@@ -590,13 +673,55 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          CLAUDE_OUTCOME: ${{ steps.claude-review.outcome }}
+          # RAW first-attempt outcome. Do NOT read this directly as "the"
+          # outcome — since #133 a second attempt may have run. The effective
+          # outcome across both attempts is computed in the run block below
+          # from these three vars; a bare steps.claude-review.outcome would
+          # misreport a successful retry as a failure.
+          CLAUDE_OUTCOME_FIRST: ${{ steps.claude-review.outcome }}
+          # '' when no retry ran — three distinct paths: the probe ran and
+          # said the API was fine; the first attempt succeeded, so the probe
+          # never ran; or the first attempt was itself skipped (doc-only /
+          # Dependabot), so the probe never ran and this is 'skipped' rather
+          # than a failure. Otherwise 'success'/'failure' (see #155).
+          CLAUDE_OUTCOME_RETRY: ${{ steps.claude-review-retry.outcome }}
+          INFRA_DOWN: ${{ steps.infra-probe.outputs.infra_down }}
           DOC_SKIP: ${{ steps.doc-check.outputs.skip }}
           DOC_SKIP_REASON: ${{ steps.doc-check.outputs.skip_reason }}
           DEPENDABOT_SKIP: ${{ steps.dependabot-check.outputs.skip }}
           DEPENDABOT_SKIP_REASON: ${{ steps.dependabot-check.outputs.skip_reason }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # --- Effective review outcome across both attempts (#133) ---
+          # The retry step only runs when the first attempt failed AND the
+          # infra probe confirmed a GitHub outage, so:
+          #   retry ran + succeeded -> effective success (a real review
+          #     completed; its verdict file/comment is authoritative)
+          #   retry ran + failed    -> effective failure (terminal)
+          #   retry did not run     -> the first attempt's outcome stands
+          #
+          # FAIL-CLOSED: match ONLY the two values that represent a retry
+          # that actually executed. A step skipped by its `if:` reports an
+          # empty outcome, but do not depend on that: an allow-list means any
+          # other value (empty, 'skipped', or anything a future runner
+          # introduces) falls through to the first attempt's outcome. The
+          # inverse — treating "not empty" as "the retry ran" — would let an
+          # unexpected value such as 'skipped' MASK a first-attempt failure
+          # into a non-failure effective outcome, and a first attempt that
+          # failed after partially writing a verdict could then reach the
+          # default-to-PASS branch below. That is a fail-open outcome, so the
+          # allow-list is load-bearing, not defensive styling.
+          case "$CLAUDE_OUTCOME_RETRY" in
+            success|failure)
+              CLAUDE_OUTCOME="$CLAUDE_OUTCOME_RETRY"
+              echo "Review outcome: first=${CLAUDE_OUTCOME_FIRST}, retry=${CLAUDE_OUTCOME_RETRY} (effective: ${CLAUDE_OUTCOME})"
+              ;;
+            *)
+              CLAUDE_OUTCOME="$CLAUDE_OUTCOME_FIRST"
+              echo "Review outcome: ${CLAUDE_OUTCOME} (no infrastructure retry)"
+              ;;
+          esac
+
           # Short-circuit: an earlier step already wrote its own summary and
           # decided to skip. Log the ACTUAL path that fired (from its own
           # skip_reason output) rather than a hardcoded message — the
@@ -687,7 +812,7 @@ jobs:
               # No verdict found — distinguish a real Claude-side failure
               # (timeout, agent error) from an infrastructure flake.
               if [ "$CLAUDE_OUTCOME" = "failure" ]; then
-                # Before blaming the review, check whether GitHub's API is
+                # Before blaming the review, establish whether GitHub's API is
                 # simply unavailable. claude-code-action calls
                 # GET /repos/{owner}/{repo}/collaborators/{actor}/permission
                 # with no retry, so a single 503 there kills the run — see #133.
@@ -696,25 +821,73 @@ jobs:
                 # and the message below ("review timed out") sent people to
                 # re-push, which cannot help and burns a CI run each time.
                 #
-                # Probing the same endpoint from here is a heuristic, not
-                # proof: it runs seconds later, so a recovered API produces a
+                # Probing that endpoint is a heuristic, not proof: it runs
+                # seconds after the failure, so a recovered API produces a
                 # false negative and we fall through to the normal message.
                 # It only ever ADDS a more accurate diagnosis; it never
                 # converts a failure into a pass.
+                #
+                # The "infra-probe" step already ran this exact probe (that is
+                # what gated the retry), so reuse its verdict. But re-probe
+                # when it said the API was up: on that path the first attempt
+                # failed for a non-infra reason, no retry ran, and an outage
+                # that began in the meantime should still be diagnosed. When
+                # the probe DID say down we reach here only because the retry
+                # also failed, which is itself fresh evidence of the outage —
+                # no second probe adds anything.
                 INFRA_HINT=""
-                if ! gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" \
+                if [ "$INFRA_DOWN" = "true" ]; then
+                  INFRA_HINT="yes"
+                elif ! gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" \
                      --jq '.permission' >/dev/null 2>&1; then
                   INFRA_HINT="yes"
                 fi
 
                 if [ -n "$INFRA_HINT" ]; then
+                  # Short SHA of the PR head commit, for the copy-pasteable
+                  # escape-hatch marker below. The marker matches on a >=7-char
+                  # prefix of github.event.pull_request.head.sha, so 12 chars is
+                  # comfortably valid. HEAD_SHA is empty on non-pull_request
+                  # events; guard so we never emit `sha=:`.
+                  SHORT_SHA="${HEAD_SHA:0:12}"
                   echo "::error::GitHub API is unavailable — this is NOT a problem with your PR."
                   echo "::error::claude-code-action's actor permission check failed and it does not retry (see smartwatermelon/github-workflows#133)."
+                  # Only claim a retry happened when one actually did. The
+                  # probe can report the API healthy (no retry) and the outage
+                  # resume before we reach the fresh probe above.
+                  if [ "$INFRA_DOWN" = "true" ]; then
+                    echo "::error::This job already retried once against the same commit; both attempts hit the outage."
+                  fi
                   echo "::error::Re-run this job when GitHub recovers: gh run rerun ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY}"
                   echo "::error::Do NOT re-push — the diff is irrelevant and a new commit will fail the same way."
+                  if [ -n "$SHORT_SHA" ]; then
+                    echo "::error::To merge without waiting, add this to the PR body, then re-run (NOT re-push): [skip-claude-review sha=${SHORT_SHA}: GitHub API outage]"
+                    echo "::error::Editing the PR body does not retrigger this workflow, so the marker only takes effect via: gh run rerun ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY}"
+                  fi
                   echo "## Claude Code Review" >> "$GITHUB_STEP_SUMMARY"
                   echo "**Verdict:** INCOMPLETE — GitHub API unavailable, not a PR problem." >> "$GITHUB_STEP_SUMMARY"
-                  echo "Re-run the job (not a re-push) once GitHub recovers. See [#133](https://github.com/smartwatermelon/github-workflows/issues/133)." >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  if [ "$INFRA_DOWN" = "true" ]; then
+                    echo "Both the initial review and the automatic infrastructure retry hit the outage." >> "$GITHUB_STEP_SUMMARY"
+                    echo "" >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                  echo "**Preferred fix:** wait for GitHub to recover, then re-run the job (a re-push will NOT help):" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  echo "gh run rerun ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY}" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  if [ -n "$SHORT_SHA" ]; then
+                    echo "" >> "$GITHUB_STEP_SUMMARY"
+                    echo "**Escape hatch:** to bypass enforcement for this commit only, add this line to the PR body:" >> "$GITHUB_STEP_SUMMARY"
+                    echo "" >> "$GITHUB_STEP_SUMMARY"
+                    echo '```' >> "$GITHUB_STEP_SUMMARY"
+                    echo "[skip-claude-review sha=${SHORT_SHA}: GitHub API outage]" >> "$GITHUB_STEP_SUMMARY"
+                    echo '```' >> "$GITHUB_STEP_SUMMARY"
+                    echo "" >> "$GITHUB_STEP_SUMMARY"
+                    echo "then re-run the job with the command above. Editing the PR body does not retrigger this workflow, and pushing a new commit changes the head SHA — which correctly invalidates a \`sha=\`-scoped marker. \`gh run rerun\` re-checks the SAME commit, which is the only way this marker can apply." >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo "See [#133](https://github.com/smartwatermelon/github-workflows/issues/133)." >> "$GITHUB_STEP_SUMMARY"
                   exit 1
                 fi
 

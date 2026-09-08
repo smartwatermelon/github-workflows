@@ -423,6 +423,9 @@ jobs:
     uses: smartwatermelon/github-workflows/.github/workflows/standards-check.yml@standards-check-v1
 ```
 
+The canonical copy is `standards/caller-stub.yml`;
+`bulk-install-standards-check.sh` installs it fleet-wide.
+
 Name the caller job `standards-check`; the required check is then
 `standards-check / run-standards-check` (caller job `standards-check`, inner
 job `run-standards-check`). With reusable workflows, GitHub reports the

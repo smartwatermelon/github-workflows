@@ -52,6 +52,17 @@ _expect_fail "zizmor: pwn-request / unpinned third-party rejected" bad-zizmor
 _mk bad-md; printf '#Bad heading\n\n\n\nx\n' >"${tmp}/bad-md/README.md"; git -C "${tmp}/bad-md" add -A
 _expect_fail "markdownlint: MD018/MD012 rejected" bad-md
 
+# A tracked example workflow that lives outside .github/workflows (e.g. docs
+# that show a caller stub) must not make zizmor scan it: only the repo's real
+# workflows are in scope. Only .github/workflows/ci.yml is a real workflow
+# here, and it is clean, so this must PASS even though the tracked example
+# file would fail zizmor if scanned.
+_mk zizmor-scoped; mkdir -p "${tmp}/zizmor-scoped/.github/workflows" "${tmp}/zizmor-scoped/docs/examples/.github/workflows"
+printf 'on: pull_request_target\npermissions: write-all\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          ref: %s{{ github.event.pull_request.head.ref }}\n' "${d}" >"${tmp}/zizmor-scoped/docs/examples/.github/workflows/bad.yml"
+printf 'on: push\npermissions:\n  contents: read\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n' >"${tmp}/zizmor-scoped/.github/workflows/ci.yml"
+git -C "${tmp}/zizmor-scoped" add -A
+_expect_pass "zizmor: tracked example workflow outside .github/workflows is out of scope" zizmor-scoped
+
 _mk bad-node; echo "20" >"${tmp}/bad-node/.nvmrc"; git -C "${tmp}/bad-node" add -A
 _expect_fail "node-floor: .nvmrc 20 rejected" bad-node
 

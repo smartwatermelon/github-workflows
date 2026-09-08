@@ -96,13 +96,23 @@ if _skipped actionlint; then echo "== actionlint: skipped by input"; else
   else echo "::notice::no workflows"; fi
 fi
 
-# zizmor: repo-root zizmor.yml, else the canonical policy one level above config-dir.
+# zizmor: .github/workflows/*.yml|*.yaml only (a tracked example workflow
+# living elsewhere, e.g. docs/examples/.github/workflows/, is out of scope).
+# Config: repo-root zizmor.yml, else the canonical policy one level above
+# config-dir.
 if _skipped zizmor; then echo "== zizmor: skipped by input"; else
   _header zizmor
-  if compgen -G "${repo}/.github/workflows/*.y*ml" >/dev/null; then
+  files=()
+  while IFS= read -r -d '' f; do
+    case "${f}" in
+      .github/workflows/*.yml|.github/workflows/*.yaml) files+=("${f}") ;;
+      *) ;;
+    esac
+  done < <(_tracked || true)
+  if ((${#files[@]} == 0)); then echo "::notice::no workflows"; else
     cfg="${repo}/zizmor.yml"; [[ -f "${cfg}" ]] || cfg="${config_dir}/../zizmor.yml"
-    (cd "${repo}" && zizmor --config "${cfg}" --min-severity low --no-online-audits .) || _fail zizmor
-  else echo "::notice::no workflows"; fi
+    (cd "${repo}" && zizmor --config "${cfg}" --min-severity low --no-online-audits "${files[@]}") || _fail zizmor
+  fi
 fi
 
 # markdownlint: *.md via markdownlint-cli2; repo config wins, else canonical.

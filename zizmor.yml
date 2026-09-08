@@ -101,6 +101,10 @@ rules:
   # (see #123 and the note at the top of .github/dependabot.yml). Adding a
   # cooldown here would re-introduce the lag that incident was about, so the
   # absence of one is a decision, not an oversight.
+  #
+  # This file also serves as the fleet-wide CI fallback policy:
+  # standards-check.yml uses it for any consuming repo that has no zizmor.yml
+  # of its own, so this ignore applies fleet-wide by design, not only here.
   dependabot-cooldown:
     ignore:
       - dependabot.yml

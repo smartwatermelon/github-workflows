@@ -450,7 +450,9 @@ file from **this** repo is used — `standards/markdownlint.json`,
 always match the workflow version that's running. A dedicated step resolves
 that SHA and fails loudly if it is empty, rather than letting
 `actions/checkout` silently fall back to the default branch and lint the
-wrong commit.
+wrong commit. This makes root [`zizmor.yml`](./zizmor.yml) the fleet-wide CI
+fallback policy for any consuming repo that has no `zizmor.yml` of its own —
+its `dependabot-cooldown` ignore, for example, applies fleet-wide by design.
 
 `.github/actionlint.yaml` in this repo carries a scoped ignore for
 `job.workflow_sha` on `standards-check.yml`, because actionlint 1.7.12's

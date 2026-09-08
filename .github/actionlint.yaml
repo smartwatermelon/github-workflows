@@ -14,6 +14,12 @@ paths:
       # (it is absent from the schema and from docs/checks.md), so it reports
       # the property as undefined. GitHub populates it at runtime.
       #
+      # Last verified against actionlint 1.7.12 and the upstream context
+      # schema reference at
+      # https://github.com/rhysd/actionlint/blob/main/docs/checks.md — whoever
+      # bumps actionlint should re-check that reference and remove this ignore
+      # once `workflow_sha` is recognized.
+      #
       # The older spelling `github.job_workflow_sha` is NOT the fix: it is
       # absent from the current contexts reference and evaluates to an empty
       # string (actions/runner#2417). Empty is the dangerous value here,

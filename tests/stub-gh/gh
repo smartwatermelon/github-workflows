@@ -105,6 +105,12 @@ case "$1" in
         echo '{"object":{"sha":"abc123"}}' | emit ;;
       "GET repos/"*)
         # default-branch lookup: repos/<owner>/<repo>
+        rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"
+        if [[ -f "${STUB_DIR}/fail-repo/${owner}__${repo}" ]]; then
+          printf '{"message":"Forbidden","status":"403"}'
+          echo 'gh: Forbidden (HTTP 403)' >&2
+          exit 1
+        fi
         echo '{"default_branch":"main"}' | emit ;;
       "PUT repos/"*"/contents/"*)
         echo '{"content":{"path":".github/workflows/standards-check.yml"},"commit":{"sha":"c0ffee"}}' | emit ;;

@@ -101,7 +101,28 @@ printf 'name: Partial\n' >"${STUB_DIR}/branch-files/acme__alpha"
 run --apply --mode=pr >/dev/null 2>&1 || true
 if grep 'PUT repos/acme/alpha' "${STUB_DIR}/calls.log" | grep -q 'sha=branchblob'; then _ok "retry: blob sha passed to PUT"; else _bad "retry: no blob sha in PUT"; fi
 
-# 9. --extra-repos adds explicit owner/repo entries outside --owners
+# 9. a failing install step stops the repo instead of falling through
+# install_push/install_pr run inside a command substitution in an `if`, which
+# suspends `set -e`. Without an explicit guard on each step, a failed
+# default-branch lookup would leave the branch empty and the PUT would still
+# fire.
+_fixture
+mkdir -p "${STUB_DIR}/fail-repo"
+: >"${STUB_DIR}/fail-repo/acme__alpha"
+rc=0
+out="$(run --apply --mode=push 2>&1)" || rc=$?
+if grep -q '^ERROR  *acme/alpha' <<<"${out}"; then _ok "failed install step is ERROR"; else _bad "failed install: ${out}"; fi
+if grep -q 'PUT repos/acme/alpha' "${STUB_DIR}/calls.log"; then _bad "PUT fired after a failed lookup"; else _ok "no PUT after a failed lookup"; fi
+if [[ "${rc}" == "1" ]]; then _ok "failed install exits 1"; else _bad "failed install exit ${rc}"; fi
+
+# 10. the same guard in pr mode: no PR is opened after a failed lookup
+_fixture
+mkdir -p "${STUB_DIR}/fail-repo"
+: >"${STUB_DIR}/fail-repo/acme__alpha"
+run --apply --mode=pr >/dev/null 2>&1 || true
+if grep -q '^pr create' "${STUB_DIR}/calls.log"; then _bad "PR opened after a failed lookup"; else _ok "no PR after a failed lookup"; fi
+
+# 11. --extra-repos adds explicit owner/repo entries outside --owners
 _fixture
 mkdir -p "${STUB_DIR}/repos"; printf '[]\n' >"${STUB_DIR}/repos/solo.json"
 out="$(run --extra-repos solo/thing 2>&1)" || true

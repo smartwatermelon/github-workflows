@@ -1,0 +1,178 @@
+name: Standards Check
+
+# Reusable, deterministic, secret-free standards check. Replaces the CI
+# judgment reviewer as the fleet's required check (dev-env#60,
+# github-workflows#154). Installs pinned linters and runs
+# standards/run-standards.sh from THIS repo at the SHA of this workflow file
+# (job.workflow_sha), so the script, the configs, and the workflow always
+# agree.
+#
+# Caller stub (name the job `standards-check`; the required check is then
+# `standards-check / run-standards-check`):
+#
+#   name: Standards Check
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, ready_for_review, reopened]
+#   permissions:
+#     contents: read
+#   jobs:
+#     standards-check:
+#       uses: smartwatermelon/github-workflows/.github/workflows/standards-check.yml@standards-check-v1
+#
+# Tool versions are pinned here and verified by checksum. Bump them by PR.
+
+on:
+  workflow_call:
+    inputs:
+      shellcheck:
+        description: Run shellcheck -S info over shell files
+        type: boolean
+        default: true
+      yamllint:
+        description: Run yamllint over YAML files
+        type: boolean
+        default: true
+      actionlint:
+        description: Run actionlint over .github/workflows
+        type: boolean
+        default: true
+      zizmor:
+        description: Run zizmor over .github/workflows
+        type: boolean
+        default: true
+      markdownlint:
+        description: Run markdownlint-cli2 over Markdown files
+        type: boolean
+        default: true
+      node_floor_check:
+        description: Fail on Node.js pins below node_floor
+        type: boolean
+        default: true
+      node_floor:
+        description: Lowest supported Node.js major
+        type: string
+        default: "22"
+
+permissions: {}
+
+env:
+  SHELLCHECK_VERSION: "0.11.0"
+  SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  ZIZMOR_VERSION: "1.30.0"
+  ZIZMOR_SHA256: "ec8c95cd800845abb9bbc5f377ec7c57d2eb8e2386a00a201d3a74ee4092e5ed"
+  YAMLLINT_VERSION: "1.38.0"
+  MARKDOWNLINT_CLI2_VERSION: "0.23.2"
+
+jobs:
+  run-standards-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          path: repo
+
+      # Resolve the SHA of THIS reusable workflow file, and fail if it is
+      # empty. `job.workflow_sha` is the documented property (the older
+      # `github.job_workflow_sha` spelling evaluates empty — actions/runner#2417).
+      # An empty ref is the dangerous case: actions/checkout would silently
+      # take the default branch, so the check would go green having linted a
+      # different commit than the one under review. Fail loudly instead.
+      - name: Resolve the standards SHA
+        id: standards_sha
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOB_WORKFLOW_SHA}" ]; then
+            echo "::error::job.workflow_sha is empty; refusing to check out an ambiguous ref"
+            exit 2
+          fi
+          echo "sha=${JOB_WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "standards SHA: ${JOB_WORKFLOW_SHA}"
+
+      - name: Checkout standards at the called-workflow SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: smartwatermelon/github-workflows
+          ref: ${{ steps.standards_sha.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: standards-src
+          sparse-checkout: |
+            standards
+            zizmor.yml
+
+      - name: Install pinned linters
+        env:
+          SKIP_SHELLCHECK: ${{ inputs.shellcheck == false }}
+          SKIP_ACTIONLINT: ${{ inputs.actionlint == false }}
+          SKIP_ZIZMOR: ${{ inputs.zizmor == false }}
+          SKIP_YAMLLINT: ${{ inputs.yamllint == false }}
+          SKIP_MARKDOWNLINT: ${{ inputs.markdownlint == false }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin"; echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+          if [ "${SKIP_SHELLCHECK}" != "true" ]; then
+            curl -Lfso /tmp/shellcheck.tar.xz \
+              "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+            echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c -
+            tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+            install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "${HOME}/.local/bin/shellcheck"
+          fi
+          if [ "${SKIP_ACTIONLINT}" != "true" ]; then
+            curl -Lfso /tmp/actionlint.tar.gz \
+              "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+            echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c -
+            tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+            install -m 0755 /tmp/actionlint "${HOME}/.local/bin/actionlint"
+          fi
+          if [ "${SKIP_ZIZMOR}" != "true" ]; then
+            curl -Lfso /tmp/zizmor.tar.gz \
+              "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+            echo "${ZIZMOR_SHA256}  /tmp/zizmor.tar.gz" | sha256sum -c -
+            mkdir -p /tmp/zizmor && tar -xzf /tmp/zizmor.tar.gz -C /tmp/zizmor
+            install -m 0755 "$(find /tmp/zizmor -type f -name zizmor | head -1)" "${HOME}/.local/bin/zizmor"
+          fi
+          if [ "${SKIP_YAMLLINT}" != "true" ]; then
+            pipx install "yamllint==${YAMLLINT_VERSION}"
+          fi
+          if [ "${SKIP_MARKDOWNLINT}" != "true" ]; then
+            npm install -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}"
+          fi
+
+      # The skip list is assembled from one env var per linter rather than one
+      # long concatenated expression, so every line stays under the shared
+      # 120-column yamllint limit. Each var holds the linter's name when the
+      # input is false and an empty string otherwise; the shell joins them.
+      - name: Run standards
+        env:
+          SKIP_SHELLCHECK: ${{ inputs.shellcheck == false && 'shellcheck' || '' }}
+          SKIP_YAMLLINT: ${{ inputs.yamllint == false && 'yamllint' || '' }}
+          SKIP_ACTIONLINT: ${{ inputs.actionlint == false && 'actionlint' || '' }}
+          SKIP_ZIZMOR: ${{ inputs.zizmor == false && 'zizmor' || '' }}
+          SKIP_MARKDOWNLINT: ${{ inputs.markdownlint == false && 'markdownlint' || '' }}
+          SKIP_NODE_FLOOR: ${{ inputs.node_floor_check == false && 'node-floor' || '' }}
+          NODE_FLOOR: ${{ inputs.node_floor }}
+        run: |
+          set -euo pipefail
+          [[ "${NODE_FLOOR}" =~ ^[0-9]+$ ]] || { echo "::error::node_floor must be an integer major"; exit 2; }
+          skips=()
+          for s in "${SKIP_SHELLCHECK}" "${SKIP_YAMLLINT}" "${SKIP_ACTIONLINT}" \
+            "${SKIP_ZIZMOR}" "${SKIP_MARKDOWNLINT}" "${SKIP_NODE_FLOOR}"; do
+            [ -n "${s}" ] && skips+=("${s}")
+          done
+          skip_list="$(IFS=,; echo "${skips[*]-}")"
+          echo "skip list: '${skip_list}'"
+          bash standards-src/standards/run-standards.sh \
+            --repo repo \
+            --config-dir standards-src/standards \
+            --skip "${skip_list}" \
+            --node-floor "${NODE_FLOOR}"

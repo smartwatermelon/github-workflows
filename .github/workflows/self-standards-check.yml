@@ -1,0 +1,16 @@
+name: Self Standards Check
+
+# Self-applying caller: runs this repo's reusable standards-check.yml on its
+# own PRs via a local path, so a PR that changes the check dogfoods itself.
+# Produces the `standards-check / run-standards-check` status check.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  standards-check:
+    uses: ./.github/workflows/standards-check.yml

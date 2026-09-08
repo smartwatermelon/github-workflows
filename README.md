@@ -392,6 +392,131 @@ work.
 
 ---
 
+## `standards-check.yml`
+
+Reusable, deterministic, secret-free standards check. Per
+[dev-env#60](https://github.com/smartwatermelon/dev-env/issues/60) and
+[github-workflows#154](https://github.com/smartwatermelon/github-workflows/issues/154),
+decided 2026-09-08, this check replaces `claude-blocking-review.yml` as the
+fleet's required check, with no judgment reviewer kept in CI. Rollout (W2)
+and retirement of the old required check (W3) follow as separate phases; see
+[`smartwatermelon/dev-env` `docs/superpowers/plans/2026-09-08-w1-standards-check.md`](https://github.com/smartwatermelon/dev-env/blob/main/docs/superpowers/plans/2026-09-08-w1-standards-check.md)
+for the full plan.
+
+It installs pinned linters and runs `standards/run-standards.sh` from this
+repo, checked out at the SHA of the workflow file itself (`job.workflow_sha`),
+so the script, the configs, and the running workflow always agree.
+
+### Setup
+
+`.github/workflows/standards-check.yml` in your repo:
+
+```yaml
+name: Standards Check
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+permissions:
+  contents: read
+jobs:
+  standards-check:
+    uses: smartwatermelon/github-workflows/.github/workflows/standards-check.yml@standards-check-v1
+```
+
+Name the caller job `standards-check`; the required check is then
+`standards-check / run-standards-check` (caller job `standards-check`, inner
+job `run-standards-check`). With reusable workflows, GitHub reports the
+**inner job** as the status check, so the check name follows the caller job
+name regardless of which repo you're in.
+
+### Inputs
+
+| Input | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `shellcheck` | boolean | `true` | Run `shellcheck -S info` over shell files |
+| `yamllint` | boolean | `true` | Run yamllint over YAML files |
+| `actionlint` | boolean | `true` | Run actionlint over `.github/workflows` |
+| `zizmor` | boolean | `true` | Run zizmor over `.github/workflows` |
+| `markdownlint` | boolean | `true` | Run markdownlint-cli2 over Markdown files |
+| `node_floor_check` | boolean | `true` | Fail on Node.js pins below `node_floor` |
+| `node_floor` | string | `"22"` | Lowest supported Node.js major |
+
+### Config precedence
+
+Per linter, a config at the caller repo's root wins. Otherwise the canonical
+file from **this** repo is used — `standards/markdownlint.json`,
+`standards/yamllint.yml`, or root `zizmor.yml` — fetched at
+`job.workflow_sha` (the SHA of the called workflow file), so the configs
+always match the workflow version that's running. A dedicated step resolves
+that SHA and fails loudly if it is empty, rather than letting
+`actions/checkout` silently fall back to the default branch and lint the
+wrong commit. This makes root [`zizmor.yml`](./zizmor.yml) the fleet-wide CI
+fallback policy for any consuming repo that has no `zizmor.yml` of its own —
+its `dependabot-cooldown` ignore, for example, applies fleet-wide by design.
+
+`.github/actionlint.yaml` in this repo carries a scoped ignore for
+`job.workflow_sha` on `standards-check.yml`, because actionlint 1.7.12's
+context schema hasn't caught up to that (documented, GitHub-populated)
+property yet. Remove the ignore once actionlint recognizes it.
+
+### Tool versions
+
+Pinned and checksum-verified in the workflow's `env:` block:
+
+| Tool | Version | Verification |
+| ---- | ------- | ------------- |
+| shellcheck | 0.11.0 | SHA-256 |
+| actionlint | 1.7.12 | SHA-256 |
+| zizmor | 1.30.0 | SHA-256 |
+| yamllint | 1.38.0 | pinned via `pipx install` |
+| markdownlint-cli2 | 0.23.2 | pinned via `npm install -g` |
+
+Bumps are manual PRs to this repo — Dependabot does not track these
+versions (they're plain strings in a workflow `env:` block, not a manifest
+Dependabot understands).
+
+### Local command
+
+```bash
+bash standards/run-standards.sh --repo <dir>
+```
+
+Runs the same checks CI runs, against a local checkout.
+
+### Tests
+
+```bash
+bash tests/run-tests.sh
+```
+
+Requires `shellcheck`, `yamllint`, `actionlint`, `zizmor`, and
+`markdownlint-cli2` (all via Homebrew), plus `jq`.
+
+### Validation
+
+On 2026-09-08, a throwaway PR
+([#163](https://github.com/smartwatermelon/github-workflows/pull/163)) with
+a real `SC2086` was pushed against the caller workflow to confirm the gate
+actually fails on a known-bad case. It did:
+`standards-check / run-standards-check` failed in
+[run 34267112924](https://github.com/smartwatermelon/github-workflows/actions/runs/34267112924),
+with shellcheck reporting the injected problem. PR #163 was then closed
+without merging.
+
+### Versioning
+
+| Tag | Meaning |
+| ----- | --------- |
+| `standards-check-v1` | **Recommended for callers.** Floating major — moved manually and human-authorized, exactly like `@v3` above. |
+| `standards-check-vX.Y.Z` | Exact release. Pin only with a specific reason to freeze; see the "Prefer floating `@v3`" discussion above — the same trade-off applies here. |
+
+This workflow uses its own prefixed tag namespace for the same reason
+`dependabot-auto-merge` does: git tags in this repo are repo-scoped, not
+per-file, so a fourth workflow starting a bare `v1` would collide with the
+existing `claude-blocking-review`/`claude-assistant` `v1` line.
+
+---
+
 ## `claude-assistant`
 
 Reusable workflow that invokes Claude Code Action. The caller handles triggers

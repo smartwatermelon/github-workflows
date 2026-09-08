@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Stub gh for bulk-install-standards-check.sh tests. Fixture layout:
+#   ${STUB_DIR}/repos/<owner>.json      -> output of `gh repo list <owner> --json ...`
+#   ${STUB_DIR}/files/<owner>__<repo>   -> existing stub content, if the repo has one
+#   ${STUB_DIR}/fail/<owner>__<repo>    -> contents GET fails 403 instead of 404
+#   ${STUB_DIR}/branch-exists/<o>__<r>  -> the chore/standards-check-stub ref exists
+#   ${STUB_DIR}/branch-files/<o>__<r>   -> file already present on that branch
+#   ${STUB_DIR}/calls.log               -> every argv, one line each
+#
+# Failure output copies real `gh api`: the JSON body on stdout, a
+# "gh: <reason> (HTTP <code>)" line on stderr, exit 1. Measured 2026-09-08
+# against `gh api repos/smartwatermelon/does-not-exist-xyz-9876`.
+# Archived state comes from the isArchived field in repos/<owner>.json.
+set -euo pipefail
+: "${STUB_DIR:?}"
+# One line per invocation: arguments carry multi-line bodies (commit message,
+# PR body), so escape newlines rather than break the log's one-line contract.
+printf '%s\n' "${*//$'\n'/\\n}" >>"${STUB_DIR}/calls.log"
+case "$1" in
+  repo)
+    # gh repo list <owner> --json name,isArchived,defaultBranchRef --limit 200
+    owner="$3"
+    cat "${STUB_DIR}/repos/${owner}.json"
+    ;;
+  api)
+    shift
+    method="GET"
+    path=""
+    filter=""
+    ref_param=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -X) method="$2"; shift 2 ;;
+        --jq) filter="$2"; shift 2 ;;
+        -f | -F) shift 2 ;;
+        -*) shift ;;
+        *) path="$1"; shift ;;
+      esac
+    done
+    # A ref is only honored as a query parameter. `gh api` turns any -f into a
+    # POST body, so a caller that passed the ref that way would not be doing a
+    # branch-scoped read at all; the fixture must not pretend otherwise.
+    if [[ "${path}" == *"?"* ]]; then
+      query="${path#*\?}"
+      path="${path%%\?*}"
+      [[ "${query}" == ref=* ]] && ref_param="${query#ref=}"
+    fi
+    # Real gh applies --jq to the response and prints raw strings; do the same,
+    # or callers reading `--jq .default_branch` get a JSON object back.
+    emit() {
+      if [[ -n "${filter}" ]]; then
+        jq -r "${filter}"
+      else
+        cat
+      fi
+    }
+    case "${method} ${path}" in
+      "GET repos/"*"/contents/.github/workflows/standards-check.yml")
+        # repos/<owner>/<repo>/contents/...
+        rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"
+        if [[ -f "${STUB_DIR}/fail/${owner}__${repo}" ]]; then
+          printf '{"message":"Forbidden","status":"403"}'
+          echo 'gh: Forbidden (HTTP 403)' >&2
+          exit 1
+        fi
+        if [[ -n "${ref_param}" && "${ref_param}" != "main" ]]; then
+          # A read scoped to the feature branch: a separate fixture, so a test
+          # can tell "already on the branch" from "on the default branch".
+          bf="${STUB_DIR}/branch-files/${owner}__${repo}"
+          if [[ -f "${bf}" ]]; then
+            echo '{"sha":"branchblob"}' | emit
+          else
+            printf '{"message":"Not Found","status":"404"}'
+            echo 'gh: Not Found (HTTP 404)' >&2
+            exit 1
+          fi
+          exit 0
+        fi
+        f="${STUB_DIR}/files/${owner}__${repo}"
+        if [[ -f "${f}" ]]; then
+          # The real Contents API wraps .content in 60-column lines with
+          # embedded "\n" escapes. Reproduce that so the caller's decode path
+          # is exercised as it will run in production, not a flat-base64
+          # simplification that would hide a newline-handling bug.
+          b64="$(base64 <"${f}")"
+          b64="$(tr -d '\n' <<<"${b64}")"
+          b64="$(fold -w 60 <<<"${b64}")"
+          b64="${b64//$'\n'/\\n}"
+          printf '{"sha":"deadbeef","content":"%s"}\n' "${b64}" | emit
+        else
+          printf '{"message":"Not Found","status":"404"}'
+          echo 'gh: Not Found (HTTP 404)' >&2
+          exit 1
+        fi ;;
+      "GET repos/"*"/git/ref/heads/chore/standards-check-stub")
+        rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"
+        if [[ -f "${STUB_DIR}/branch-exists/${owner}__${repo}" ]]; then
+          echo '{"object":{"sha":"branchsha"}}' | emit
+        else
+          printf '{"message":"Not Found","status":"404"}'
+          echo 'gh: Not Found (HTTP 404)' >&2
+          exit 1
+        fi ;;
+      "GET repos/"*"/git/ref/heads/"*)
+        echo '{"object":{"sha":"abc123"}}' | emit ;;
+      "GET repos/"*)
+        # default-branch lookup: repos/<owner>/<repo>
+        rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"
+        if [[ -f "${STUB_DIR}/fail-repo/${owner}__${repo}" ]]; then
+          printf '{"message":"Forbidden","status":"403"}'
+          echo 'gh: Forbidden (HTTP 403)' >&2
+          exit 1
+        fi
+        echo '{"default_branch":"main"}' | emit ;;
+      "PUT repos/"*"/contents/"*)
+        echo '{"content":{"path":".github/workflows/standards-check.yml"},"commit":{"sha":"c0ffee"}}' | emit ;;
+      "POST repos/"*"/git/refs")
+        echo '{"ref":"refs/heads/x"}' | emit ;;
+      *) echo "stub gh: unhandled ${method} ${path}" >&2; exit 99 ;;
+    esac
+    ;;
+  pr)
+    echo "https://github.com/stub/pr/1"
+    ;;
+  *) echo "stub gh: unhandled $*" >&2; exit 99 ;;
+esac

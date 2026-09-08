@@ -1,0 +1,3 @@
+# Repos that never get standards-check.yml installed by
+# bulk-install-standards-check.sh. One owner/repo per line; # is a comment.
+nightowlstudiollc/networth-agent

@@ -31,6 +31,15 @@ done
 repo="$(cd "${repo}" && pwd)"
 config_dir="$(cd "${config_dir}" && pwd)"
 
+# Fail loudly on a directory git cannot read. Every file-based linter
+# enumerates through `_tracked || true`, so without this guard a non-repo (or
+# a repo git refuses, e.g. dubious ownership) yields an empty file list and
+# each linter reports a clean pass over nothing.
+if ! git -C "${repo}" rev-parse --git-dir >/dev/null 2>&1; then
+  echo "::error::--repo ${repo} is not a git repository"
+  exit 2
+fi
+
 failures=0
 _skipped() { [[ ",${skip}," == *",$1,"* ]]; }
 _header() { echo; echo "== $1"; }

@@ -11,11 +11,16 @@ for tool in shellcheck yamllint actionlint zizmor markdownlint-cli2 jq; do
   command -v "${tool}" >/dev/null || { echo "SKIP: ${tool} not on PATH"; exit 0; }
 done
 tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
+# Hermetic fixtures: the user's global init.templateDir scaffolds
+# .editorconfig/.gitignore/.claude into every `git init`, which leaks real
+# files into fixtures that are supposed to be empty. An explicit empty
+# --template overrides it, so a bare fixture really is bare.
+tmpl="$(mktemp -d)"
+trap 'rm -rf "${tmp}" "${tmpl}"' EXIT
 pass=0; fail=0
 _ok() { echo "  ok   $1"; pass=$((pass + 1)); }
 _bad() { echo "  FAIL $1"; fail=$((fail + 1)); }
-_mk() { mkdir -p "${tmp}/$1"; git -C "${tmp}/$1" init -q; }
+_mk() { mkdir -p "${tmp}/$1"; git -C "${tmp}/$1" init -q --template="${tmpl}"; }
 _expect_fail() { # name dir
   if bash "${runner}" --repo "${tmp}/$2" --config-dir "${cfg}" >"${tmp}/$2.log" 2>&1; then _bad "$1 (accepted; see ${tmp}/$2.log)"; else _ok "$1"; fi
 }
@@ -63,6 +68,17 @@ if bash "${runner}" --repo "${tmp}/bad-sh" --config-dir "${cfg}" --skip shellche
 
 _mk empty; git -C "${tmp}/empty" add -A
 _expect_pass "empty repo passes (nothing to lint is not a failure)" empty
+
+# A --repo that is not a git repository must fail loudly with exit 2, not
+# report a clean pass. Every file-based linter enumerates via `git ls-files
+# || true`, so without the guard an unreadable directory lints as empty and
+# the check goes green over nothing.
+mkdir -p "${tmp}/not-a-repo"
+set +e
+bash "${runner}" --repo "${tmp}/not-a-repo" --config-dir "${cfg}" >"${tmp}/not-a-repo.log" 2>&1
+rc=$?
+set -e
+if [[ "${rc}" -eq 2 ]]; then _ok "non-repo --repo exits 2"; else _bad "non-repo --repo exited ${rc}, expected 2 (see ${tmp}/not-a-repo.log)"; fi
 
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

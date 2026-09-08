@@ -1,0 +1,28 @@
+# actionlint configuration.
+#
+# Like zizmor.yml, every entry here is a documented policy decision, not a
+# convenience mute. Findings that reflect a real gap stay visible.
+
+paths:
+  .github/workflows/standards-check.yml:
+    ignore:
+      # `job.workflow_sha` is the documented GitHub context property for "the
+      # commit SHA of the workflow file that defines the current job" — which
+      # is exactly what a reusable workflow needs in order to check out its
+      # OWN standards/ and configs at the same commit as the workflow being
+      # run. actionlint 1.7.12 has not added it to the `job` context schema
+      # (it is absent from the schema and from docs/checks.md), so it reports
+      # the property as undefined. GitHub populates it at runtime.
+      #
+      # The older spelling `github.job_workflow_sha` is NOT the fix: it is
+      # absent from the current contexts reference and evaluates to an empty
+      # string (actions/runner#2417). Empty is the dangerous value here,
+      # because actions/checkout treats an empty `ref` as the default branch
+      # — the check would go green having linted a different commit than the
+      # one under review. standards-check.yml therefore resolves the SHA in
+      # its own step and exits 2 when it is empty, so a future runner-side
+      # regression fails loudly instead of silently linting the wrong tree.
+      #
+      # Scoped to this one message in this one file: any other expression
+      # error, in this or any other workflow, still fires.
+      - 'property "workflow_sha" is not defined in object type'

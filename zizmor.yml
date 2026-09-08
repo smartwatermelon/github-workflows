@@ -93,6 +93,7 @@ rules:
       - claude-blocking-review.yml # caller for claude-blocking-review.yml
       - claude.yml # caller for claude-assistant.yml
       - dependabot-auto-merge.yml # caller for dependabot-auto-merge.yml
+      - standards-check.yml # caller for standards-check.yml
 
   # A cooldown deliberately DELAYS applying action updates. This repo was
   # burned by exactly that delay: claude-code-action sat at v1.0.70 for 123
@@ -112,3 +113,14 @@ rules:
   self-repository:
     ignore:
       - self-review.yml
+      - self-standards-check.yml
+
+  # markdownlint-cli2 and yamllint have no lockfile to install from — they are
+  # single pinned CLI tools, not project dependencies. standards-check.yml
+  # pins an exact version of each (MARKDOWNLINT_CLI2_VERSION,
+  # YAMLLINT_VERSION), and the three binary downloads next to them are
+  # additionally SHA256-verified. A lockfile would add a second place for the
+  # version to drift without removing the install.
+  adhoc-packages:
+    ignore:
+      - standards-check.yml

@@ -1,0 +1,8 @@
+---
+# Canonical yamllint config for standards-check.yml. Mirrors
+# ~/.config/yamllint/config in dotfiles; keep them in sync.
+extends: relaxed
+
+rules:
+  line-length:
+    max: 120

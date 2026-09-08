@@ -46,5 +46,30 @@ mkdir -p "${tmp}/f6/.github/workflows"; echo "20.19.4" >"${tmp}/f6/.nvmrc"
 printf 'jobs:\n  b:\n    steps:\n      - with:\n          node-version-file: .nvmrc\n' >"${tmp}/f6/.github/workflows/ci.yml"
 if bash "${checker}" "${tmp}/f6" 22 >/dev/null 2>&1; then _bad "node-version-file -> 20 accepted"; else _ok "node-version-file -> 20 rejected"; fi
 
+# Fixture 7: a real YAML inline comment (space before #) must not hide the pin
+mkdir -p "${tmp}/f7/.github/workflows"
+printf 'jobs:\n  b:\n    steps:\n      - with:\n          node-version: 20 # legacy\n' >"${tmp}/f7/.github/workflows/ci.yml"
+if bash "${checker}" "${tmp}/f7" 22 >/dev/null 2>&1; then _bad "node-version 20 with trailing comment accepted"; else _ok "node-version 20 with trailing comment rejected"; fi
+
+# Fixture 8: "20#c" is the YAML string "20#c", not version 20 (no space before
+# the #, so YAML starts no comment). It must not be misread as a Node 20 pin.
+mkdir -p "${tmp}/f8/.github/workflows"
+printf 'jobs:\n  b:\n    steps:\n      - with:\n          node-version: 20#c\n' >"${tmp}/f8/.github/workflows/ci.yml"
+if bash "${checker}" "${tmp}/f8" 22 >/dev/null 2>&1; then _ok "unparseable '20#c' not misread as Node 20"; else _bad "'20#c' misread as a Node 20 pin"; fi
+
+# Fixture 9: package.json present but jq unavailable must fail loudly (exit 2),
+# never skip the engines.node source in silence.
+mkdir -p "${tmp}/f9/bin" "${tmp}/f9/repo"
+echo '{"engines":{"node":">=14"}}' >"${tmp}/f9/repo/package.json"
+for c in grep head sed printf bash cat tr; do
+  p="$(command -v "${c}" || true)"
+  [[ -n "${p}" ]] && ln -sf "${p}" "${tmp}/f9/bin/${c}"
+done
+if env PATH="${tmp}/f9/bin" bash "${checker}" "${tmp}/f9/repo" 22 >/dev/null 2>&1; then
+  _bad "missing jq silently skipped engines.node"
+else
+  _ok "missing jq fails loudly instead of skipping engines.node"
+fi
+
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

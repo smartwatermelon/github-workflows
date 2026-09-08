@@ -50,7 +50,14 @@ for f in "${repo}/.nvmrc" "${repo}/.node-version"; do
   _check "${major}" "${f#"${repo}"/}: ${raw}"
 done
 
-if [[ -f "${repo}/package.json" ]] && command -v jq >/dev/null; then
+if [[ -f "${repo}/package.json" ]] && ! command -v jq >/dev/null; then
+  # Never skip a documented source silently: without jq an engines.node pin
+  # below the floor would pass unnoticed, which is worse than a hard failure.
+  echo "::error::package.json is present but jq is not installed; engines.node cannot be checked"
+  exit 2
+fi
+
+if [[ -f "${repo}/package.json" ]]; then
   eng="$(jq -r '.engines.node // empty' "${repo}/package.json" 2>/dev/null || true)"
   if [[ -n "${eng}" ]]; then
     # Lower bound: first numeric token after an optional >= / ^ / ~ prefix.
@@ -68,16 +75,21 @@ shopt -s nullglob
 for wf in "${repo}"/.github/workflows/*.yml "${repo}"/.github/workflows/*.yaml; do
   rel="${wf#"${repo}"/}"
   while IFS= read -r line; do
-    val="$(printf '%s' "${line}" | sed -E 's/.*node-version:[[:space:]]*//; s/[[:space:]]*#.*$//; s/^["'"'"']//; s/["'"'"']$//')"
+    val="$(printf '%s' "${line}" | sed -E 's/.*node-version:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^["'"'"']//; s/["'"'"']$//')"
     if [[ "${val}" == *"${expr_open}"* ]]; then
       echo "::notice::${rel}: node-version is an expression (${val}); not checked"
       continue
     fi
     major="$(_major "${val}")"
+    # A value that is neither a number nor a known floating alias is not
+    # something this checker can vouch for; say so rather than pass silently.
+    if [[ -z "${major}" && ! "${val}" =~ ^(lts/.*|node|latest|current|\*)$ ]]; then
+      echo "::notice::${rel}: node-version '${val}' is not a recognisable version or alias; not checked"
+    fi
     _check "${major}" "${rel}: node-version: ${val}"
   done < <(grep -E '^\s*node-version:' "${wf}" || true)
   while IFS= read -r line; do
-    vf="$(printf '%s' "${line}" | sed -E 's/.*node-version-file:[[:space:]]*//; s/[[:space:]]*#.*$//; s/^["'"'"']//; s/["'"'"']$//')"
+    vf="$(printf '%s' "${line}" | sed -E 's/.*node-version-file:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^["'"'"']//; s/["'"'"']$//')"
     if [[ -f "${repo}/${vf}" ]]; then
       raw="$(_version_from_file "${repo}/${vf}")"
       major="$(_major "${raw}")"

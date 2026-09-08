@@ -93,3 +93,22 @@ rules:
       - claude-blocking-review.yml # caller for claude-blocking-review.yml
       - claude.yml # caller for claude-assistant.yml
       - dependabot-auto-merge.yml # caller for dependabot-auto-merge.yml
+
+  # A cooldown deliberately DELAYS applying action updates. This repo was
+  # burned by exactly that delay: claude-code-action sat at v1.0.70 for 123
+  # releases and stayed vulnerable to GHSA-8q5r-mmjf-575q with no PR opened
+  # (see #123 and the note at the top of .github/dependabot.yml). Adding a
+  # cooldown here would re-introduce the lag that incident was about, so the
+  # absence of one is a decision, not an oversight.
+  dependabot-cooldown:
+    ignore:
+      - dependabot.yml
+
+  # zizmor advises `$/...` for a same-repo reusable workflow call. GitHub and
+  # actionlint both reject that form — actionlint reports "not following the
+  # format owner/repo/path@ref nor ./path/to/workflow.yml" — so `./...` is the
+  # only syntax that actually runs. Verified against zizmor 1.30 / actionlint
+  # on 2026-09-08.
+  self-repository:
+    ignore:
+      - self-review.yml

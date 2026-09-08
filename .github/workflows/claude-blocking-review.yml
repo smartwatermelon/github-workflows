@@ -568,10 +568,16 @@ jobs:
           # `secrets: claude_oauth_token: required: true` on this
           # workflow_call only guarantees the caller supplied a `secrets:`
           # block — it does NOT guarantee the underlying repo secret it
-          # references is actually set. A caller passing
-          # `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` from a repo where that
-          # secret was never added still satisfies the `required: true`
-          # check while passing an empty string through.
+          # references is actually set. A caller passing its
+          # CLAUDE_CODE_OAUTH_TOKEN secret from a repo where that secret
+          # was never added still satisfies the `required: true` check
+          # while passing an empty string through.
+          #
+          # (Written without the ${_{ }} expression syntax on purpose:
+          # GitHub interpolates expressions inside `run:` blocks even in
+          # shell comments, and actionlint resolves them against this
+          # workflow's own `secrets:` — which declares claude_oauth_token,
+          # not CLAUDE_CODE_OAUTH_TOKEN.)
           #
           # Gated behind the same doc-only/Dependabot skip outputs as the
           # review step itself (rather than running unconditionally right

@@ -2,7 +2,14 @@
 # Stub gh for bulk-install-standards-check.sh tests. Fixture layout:
 #   ${STUB_DIR}/repos/<owner>.json      -> output of `gh repo list <owner> --json ...`
 #   ${STUB_DIR}/files/<owner>__<repo>   -> existing stub content, if the repo has one
+#   ${STUB_DIR}/fail/<owner>__<repo>    -> contents GET fails 403 instead of 404
+#   ${STUB_DIR}/branch-exists/<o>__<r>  -> the chore/standards-check-stub ref exists
+#   ${STUB_DIR}/branch-files/<o>__<r>   -> file already present on that branch
 #   ${STUB_DIR}/calls.log               -> every argv, one line each
+#
+# Failure output copies real `gh api`: the JSON body on stdout, a
+# "gh: <reason> (HTTP <code>)" line on stderr, exit 1. Measured 2026-09-08
+# against `gh api repos/smartwatermelon/does-not-exist-xyz-9876`.
 # Archived state comes from the isArchived field in repos/<owner>.json.
 set -euo pipefail
 : "${STUB_DIR:?}"
@@ -20,6 +27,7 @@ case "$1" in
     method="GET"
     path=""
     filter=""
+    ref_param=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         -X) method="$2"; shift 2 ;;
@@ -29,6 +37,14 @@ case "$1" in
         *) path="$1"; shift ;;
       esac
     done
+    # A ref is only honored as a query parameter. `gh api` turns any -f into a
+    # POST body, so a caller that passed the ref that way would not be doing a
+    # branch-scoped read at all; the fixture must not pretend otherwise.
+    if [[ "${path}" == *"?"* ]]; then
+      query="${path#*\?}"
+      path="${path%%\?*}"
+      [[ "${query}" == ref=* ]] && ref_param="${query#ref=}"
+    fi
     # Real gh applies --jq to the response and prints raw strings; do the same,
     # or callers reading `--jq .default_branch` get a JSON object back.
     emit() {
@@ -42,6 +58,24 @@ case "$1" in
       "GET repos/"*"/contents/.github/workflows/standards-check.yml")
         # repos/<owner>/<repo>/contents/...
         rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"
+        if [[ -f "${STUB_DIR}/fail/${owner}__${repo}" ]]; then
+          printf '{"message":"Forbidden","status":"403"}'
+          echo 'gh: Forbidden (HTTP 403)' >&2
+          exit 1
+        fi
+        if [[ -n "${ref_param}" && "${ref_param}" != "main" ]]; then
+          # A read scoped to the feature branch: a separate fixture, so a test
+          # can tell "already on the branch" from "on the default branch".
+          bf="${STUB_DIR}/branch-files/${owner}__${repo}"
+          if [[ -f "${bf}" ]]; then
+            echo '{"sha":"branchblob"}' | emit
+          else
+            printf '{"message":"Not Found","status":"404"}'
+            echo 'gh: Not Found (HTTP 404)' >&2
+            exit 1
+          fi
+          exit 0
+        fi
         f="${STUB_DIR}/files/${owner}__${repo}"
         if [[ -f "${f}" ]]; then
           # The real Contents API wraps .content in 60-column lines with
@@ -54,7 +88,18 @@ case "$1" in
           b64="${b64//$'\n'/\\n}"
           printf '{"sha":"deadbeef","content":"%s"}\n' "${b64}" | emit
         else
-          echo '{"message":"Not Found","status":"404"}' >&2; exit 1
+          printf '{"message":"Not Found","status":"404"}'
+          echo 'gh: Not Found (HTTP 404)' >&2
+          exit 1
+        fi ;;
+      "GET repos/"*"/git/ref/heads/chore/standards-check-stub")
+        rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"
+        if [[ -f "${STUB_DIR}/branch-exists/${owner}__${repo}" ]]; then
+          echo '{"object":{"sha":"branchsha"}}' | emit
+        else
+          printf '{"message":"Not Found","status":"404"}'
+          echo 'gh: Not Found (HTTP 404)' >&2
+          exit 1
         fi ;;
       "GET repos/"*"/git/ref/heads/"*)
         echo '{"object":{"sha":"abc123"}}' | emit ;;

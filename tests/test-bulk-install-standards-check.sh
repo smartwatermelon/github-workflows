@@ -69,7 +69,39 @@ _fixture
 out="$(run --only nite/gamma 2>&1)" || true
 if grep -q 'acme/' <<<"${out}"; then _bad "--only leaked other repos"; else _ok "--only restricts"; fi
 
-# 6. --extra-repos adds explicit owner/repo entries outside --owners
+# 6. a non-404 API failure is ERROR, not MISSING, and writes nothing
+# A 403 or a rate-limit must never read as "the file is absent", because in
+# --apply --mode=push that would PUT the stub onto the default branch of a
+# repo whose real state is unknown.
+_fixture
+mkdir -p "${STUB_DIR}/fail"
+: >"${STUB_DIR}/fail/acme__alpha"
+rc=0
+out="$(run --apply --mode=push 2>&1)" || rc=$?
+if grep -q '^ERROR  *acme/alpha' <<<"${out}"; then _ok "non-404 failure is ERROR"; else _bad "non-404 classification: ${out}"; fi
+if grep -q 'PUT repos/acme/alpha' "${STUB_DIR}/calls.log"; then _bad "ERROR repo was written"; else _ok "ERROR repo not written"; fi
+if [[ "${rc}" == "1" ]]; then _ok "non-404 failure exits 1"; else _bad "exit status ${rc}, expected 1"; fi
+
+# 7. pr mode is retry-safe: an existing branch is reused, not re-created
+_fixture
+mkdir -p "${STUB_DIR}/branch-exists"
+: >"${STUB_DIR}/branch-exists/acme__alpha"
+rc=0
+out="$(run --apply --mode=pr 2>&1)" || rc=$?
+if grep -q 'POST repos/acme/alpha/git/refs' "${STUB_DIR}/calls.log"; then _bad "existing branch was re-created"; else _ok "existing branch reused"; fi
+if grep 'PUT repos/acme/alpha' "${STUB_DIR}/calls.log" | grep -q 'branch=chore/standards-check-stub'; then _ok "retry: PUT goes to the existing branch"; else _bad "retry: PUT branch"; fi
+if grep -q '^pr create' "${STUB_DIR}/calls.log"; then _ok "retry: PR opened"; else _bad "retry: no PR"; fi
+if [[ "${rc}" == "0" ]]; then _ok "retry run exits 0"; else _bad "retry exit status ${rc}: ${out}"; fi
+
+# 8. retry with the file already on the branch passes its blob sha to the PUT
+_fixture
+mkdir -p "${STUB_DIR}/branch-exists" "${STUB_DIR}/branch-files"
+: >"${STUB_DIR}/branch-exists/acme__alpha"
+printf 'name: Partial\n' >"${STUB_DIR}/branch-files/acme__alpha"
+run --apply --mode=pr >/dev/null 2>&1 || true
+if grep 'PUT repos/acme/alpha' "${STUB_DIR}/calls.log" | grep -q 'sha=branchblob'; then _ok "retry: blob sha passed to PUT"; else _bad "retry: no blob sha in PUT"; fi
+
+# 9. --extra-repos adds explicit owner/repo entries outside --owners
 _fixture
 mkdir -p "${STUB_DIR}/repos"; printf '[]\n' >"${STUB_DIR}/repos/solo.json"
 out="$(run --extra-repos solo/thing 2>&1)" || true

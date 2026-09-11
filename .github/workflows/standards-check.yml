@@ -134,11 +134,15 @@ jobs:
               exit 0
               ;;
           esac
-          if git -C repo fetch --depth=1 origin "${BASE_SHA}" 2>/dev/null; then
+          # Capture stderr rather than discarding it: a fallback that cannot
+          # say WHY it fired is a rate you can only sample, not a fault you can
+          # diagnose. Keep it to one line so the annotation stays readable.
+          if fetch_err=$(git -C repo fetch --depth=1 origin "${BASE_SHA}" 2>&1); then
             echo "changed_since=${BASE_SHA}" >> "${GITHUB_OUTPUT}"
             echo "scoping to files changed since ${BASE_SHA}"
           else
-            echo "::warning::could not fetch base ${BASE_SHA}; falling back to whole-repo sweep"
+            fetch_err=$(printf '%s' "${fetch_err}" | tr '\n' ' ' | tr -s ' ')
+            echo "::warning::could not fetch base ${BASE_SHA}; falling back to whole-repo sweep — git said: ${fetch_err}"
           fi
 
       - name: Resolve the standards SHA

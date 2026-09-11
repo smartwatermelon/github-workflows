@@ -21,6 +21,14 @@ name: Standards Check
 #       uses: smartwatermelon/github-workflows/.github/workflows/standards-check.yml@standards-check-v1
 #
 # Tool versions are pinned here and verified by checksum. Bump them by PR.
+#
+# SCOPE: by default a pull_request run lints only the files the PR changed.
+# Whole-repo linting fails a PR for debt in files its author never opened,
+# which was the largest single source of standards-check failures on this
+# fleet. To sweep the whole repo deliberately — a hygiene round — add the
+# `standards:hygiene` label to the PR and push (the label list is read from
+# the event payload, which is captured when the run is triggered, so adding a
+# label does not by itself start a new run). Non-PR triggers always sweep.
 
 on:
   workflow_call:
@@ -53,6 +61,12 @@ on:
         description: Lowest supported Node.js major
         type: string
         default: "22"
+      hygiene_label:
+        description: >-
+          PR label that forces a whole-repo sweep instead of the default
+          changed-files-only scope.
+        type: string
+        default: "standards:hygiene"
 
 permissions: {}
 
@@ -85,6 +99,48 @@ jobs:
       # An empty ref is the dangerous case: actions/checkout would silently
       # take the default branch, so the check would go green having linted a
       # different commit than the one under review. Fail loudly instead.
+      # Decide the scope of this run, and fetch the base commit if narrowing.
+      #
+      # Default is changed-files-only: a PR is judged on what it changed, not
+      # on debt that predates it. A whole-repo sweep is still available, and is
+      # what runs on any non-pull_request trigger (there is no base to diff
+      # against) or when the PR carries the hygiene label.
+      #
+      # `fetch-depth: 1` leaves only one commit locally, so the base commit has
+      # to be fetched explicitly; GitHub serves any SHA reachable in the repo.
+      # The checked-out HEAD for a pull_request event is refs/pull/N/merge,
+      # whose first parent is the base — so diffing against BASE_SHA yields the
+      # PR's own changes and nothing else.
+      #
+      # If that fetch fails, this falls back to a whole-repo sweep rather than
+      # to an empty diff. A failed narrow must never be the quiet path: linting
+      # everything is noisy but honest, linting nothing is a green check over
+      # zero files.
+      - name: Resolve scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          HYGIENE_LABEL: ${{ inputs.hygiene_label }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ]; then
+            echo "no pull_request base sha — whole-repo sweep"
+            exit 0
+          fi
+          case ",${LABELS}," in
+            *",${HYGIENE_LABEL},"*)
+              echo "hygiene label '${HYGIENE_LABEL}' present — whole-repo sweep"
+              exit 0
+              ;;
+          esac
+          if git -C repo fetch --depth=1 origin "${BASE_SHA}" 2>/dev/null; then
+            echo "changed_since=${BASE_SHA}" >> "${GITHUB_OUTPUT}"
+            echo "scoping to files changed since ${BASE_SHA}"
+          else
+            echo "::warning::could not fetch base ${BASE_SHA}; falling back to whole-repo sweep"
+          fi
+
       - name: Resolve the standards SHA
         id: standards_sha
         env:
@@ -161,6 +217,7 @@ jobs:
           SKIP_MARKDOWNLINT: ${{ inputs.markdownlint == false && 'markdownlint' || '' }}
           SKIP_NODE_FLOOR: ${{ inputs.node_floor_check == false && 'node-floor' || '' }}
           NODE_FLOOR: ${{ inputs.node_floor }}
+          CHANGED_SINCE: ${{ steps.scope.outputs.changed_since }}
         run: |
           set -euo pipefail
           [[ "${NODE_FLOOR}" =~ ^[0-9]+$ ]] || { echo "::error::node_floor must be an integer major"; exit 2; }
@@ -171,8 +228,15 @@ jobs:
           done
           skip_list="$(IFS=,; echo "${skips[*]-}")"
           echo "skip list: '${skip_list}'"
+          # An empty CHANGED_SINCE means whole-repo, so the flag is omitted
+          # entirely rather than passed with an empty value — the script
+          # treats an unresolvable ref as a hard error, which is correct for a
+          # typo'd ref but wrong for "no narrowing requested".
+          scope_args=()
+          [ -n "${CHANGED_SINCE}" ] && scope_args+=(--changed-since "${CHANGED_SINCE}")
           bash standards-src/standards/run-standards.sh \
             --repo repo \
             --config-dir standards-src/standards \
             --skip "${skip_list}" \
-            --node-floor "${NODE_FLOOR}"
+            --node-floor "${NODE_FLOOR}" \
+            "${scope_args[@]-}"

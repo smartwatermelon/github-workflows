@@ -91,5 +91,73 @@ rc=$?
 set -e
 if [[ "${rc}" -eq 2 ]]; then _ok "non-repo --repo exits 2"; else _bad "non-repo --repo exited ${rc}, expected 2 (see ${tmp}/not-a-repo.log)"; fi
 
+# --changed-since: a feature branch must not inherit pre-existing debt from
+# files it never touched, while still being held to its own changes.
+#
+# The fixture pins both halves, because a flag that suppressed everything
+# would pass the first assertion and be worthless. OLD.md carries real MD032
+# debt and is never touched by the branch; NEW.md is the branch's own file.
+#
+# Hooks are disabled via core.hooksPath: the author's global hooks include
+# branch protection (which refuses the commit on main) and a markdownlint
+# --fix hook (which silently repairs the deliberately-bad fixture). Either
+# one makes this test measure the environment instead of the flag.
+_mk changed-since
+cs="${tmp}/changed-since"
+git -C "${cs}" config core.hooksPath "${tmpl}"
+git -C "${cs}" config user.email test@example.invalid
+git -C "${cs}" config user.name "standards test"
+printf '# Title\n\nText\n- a\n- b\n' >"${cs}/OLD.md"
+git -C "${cs}" add -A
+git -C "${cs}" commit -qm base
+cs_base="$(git -C "${cs}" rev-parse HEAD)"
+printf '# New\n\nSome text.\n' >"${cs}/NEW.md"
+git -C "${cs}" add -A
+git -C "${cs}" commit -qm feat
+
+# Control: without the flag, the old debt must still fail. If this passes,
+# the fixture is not actually dirty and the assertion below proves nothing.
+if bash "${runner}" --repo "${cs}" --config-dir "${cfg}" --skip node-floor >"${tmp}/cs-whole.log" 2>&1; then
+  _bad "--changed-since control: whole-repo accepted known MD032 debt (see ${tmp}/cs-whole.log)"
+else
+  _ok "--changed-since control: whole-repo still fails on pre-existing debt"
+fi
+
+if bash "${runner}" --repo "${cs}" --config-dir "${cfg}" --skip node-floor \
+  --changed-since "${cs_base}" >"${tmp}/cs-narrow.log" 2>&1; then
+  _ok "--changed-since ignores debt in files the branch did not touch"
+else
+  _bad "--changed-since rejected a clean branch (see ${tmp}/cs-narrow.log)"
+fi
+
+# The other half: the branch is still responsible for its own changes.
+printf '# New\n\nText\n- a\n- b\n' >"${cs}/NEW.md"
+git -C "${cs}" add -A
+git -C "${cs}" commit -qm dirty
+if bash "${runner}" --repo "${cs}" --config-dir "${cfg}" --skip node-floor \
+  --changed-since "${cs_base}" >"${tmp}/cs-dirty.log" 2>&1; then
+  _bad "--changed-since accepted a violation in a file the branch changed"
+else
+  if grep -q 'OLD.md' "${tmp}/cs-dirty.log"; then
+    _bad "--changed-since reported OLD.md, which the branch never touched"
+  else
+    _ok "--changed-since still fails on violations in changed files, and only those"
+  fi
+fi
+
+# An unresolvable ref must exit 2 rather than compute an empty changed set:
+# every file-based linter would then pass over nothing and the check would go
+# green having linted zero files.
+set +e
+bash "${runner}" --repo "${cs}" --config-dir "${cfg}" \
+  --changed-since deadbeef99 >"${tmp}/cs-badref.log" 2>&1
+rc=$?
+set -e
+if [[ "${rc}" -eq 2 ]]; then
+  _ok "--changed-since with an unresolvable ref exits 2"
+else
+  _bad "--changed-since bad ref exited ${rc}, expected 2 (see ${tmp}/cs-badref.log)"
+fi
+
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

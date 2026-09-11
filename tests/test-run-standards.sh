@@ -159,5 +159,44 @@ else
   _bad "--changed-since bad ref exited ${rc}, expected 2 (see ${tmp}/cs-badref.log)"
 fi
 
+# The workflow builds the optional --changed-since flag in an array and
+# expands it at the call site. "${arr[@]-}" expands an EMPTY array to one
+# empty-string argument rather than to nothing, which lands on the runner's
+# catch-all `*)` branch as `unknown argument: ` and exits 2 — so a repo that
+# skips no linters and requests no narrowing fails the whole check. Assert the
+# expansion form the workflow actually uses passes no stray argument.
+# This asserts on argument assembly only, so it does not depend on the linters
+# being installed — it counts what the call site would pass, without running a
+# real lint. The workflow's own expansion form is reproduced verbatim.
+_argc_for() { # $1 = expansion form, literally as written in the workflow
+  bash -c '
+    set -euo pipefail
+    scope_args=()
+    CHANGED_SINCE=""
+    [ -n "${CHANGED_SINCE}" ] && scope_args+=(--changed-since "${CHANGED_SINCE}")
+    set -- --skip "" --node-floor 22 '"$1"'
+    echo "$#"
+  '
+}
+# Built from a literal dollar rather than written inline, so the expansion
+# forms under test stay unexpanded here without tripping SC2016.
+d='\044'
+fixed_form="$(printf '"%b{scope_args[@]}"' "${d}")"
+broken_form="$(printf '"%b{scope_args[@]-}"' "${d}")"
+fixed_argc="$(_argc_for "${fixed_form}")"
+broken_argc="$(_argc_for "${broken_form}")"
+if [[ "${fixed_argc}" -eq 4 ]]; then
+  _ok "empty scope_args expands to nothing (no stray empty argument)"
+else
+  _bad "empty scope_args expanded to ${fixed_argc} args, expected 4"
+fi
+# Guard the test itself: the form this replaced must still be detectably wrong,
+# so a future refactor cannot make this assertion vacuous.
+if [[ "${broken_argc}" -eq 5 ]]; then
+  _ok "known-bad expansion form is still detected as passing a stray argument"
+else
+  _bad "known-bad expansion form no longer reproduces; this test proves nothing"
+fi
+
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

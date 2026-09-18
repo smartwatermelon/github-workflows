@@ -90,7 +90,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 1
+          # Depth 2 so the base commit is already local: for a pull_request
+          # event HEAD is refs/pull/N/merge, whose first parent IS the base.
+          # Scoping therefore needs no network call and no credentials — see
+          # "Resolve scope" below.
+          fetch-depth: 2
           path: repo
 
       # Resolve the SHA of THIS reusable workflow file, and fail if it is
@@ -106,14 +110,29 @@ jobs:
       # what runs on any non-pull_request trigger (there is no base to diff
       # against) or when the PR carries the hygiene label.
       #
-      # `fetch-depth: 1` leaves only one commit locally, so the base commit has
-      # to be fetched explicitly; GitHub serves any SHA reachable in the repo.
-      # The checked-out HEAD for a pull_request event is refs/pull/N/merge,
-      # whose first parent is the base — so diffing against BASE_SHA yields the
-      # PR's own changes and nothing else.
+      # The base comes from the local commit graph, not from the network.
+      # `fetch-depth: 2` above brings down refs/pull/N/merge and its parents,
+      # and that merge commit's FIRST parent is the base — so `HEAD^1` is the
+      # diff target and no fetch is required.
       #
-      # If that fetch fails, this falls back to a whole-repo sweep rather than
-      # to an empty diff. A failed narrow must never be the quiet path: linting
+      # This replaces an explicit `git fetch origin ${BASE_SHA}`, which could
+      # never work on a private repo: the checkout sets
+      # `persist-credentials: false` (deliberate, zizmor `artipacked`), leaving
+      # no credential for the fetch. Public repos served the unauthenticated
+      # fetch and scoped correctly; every private repo failed the fetch and
+      # silently swept whole-repo on every PR. See #170.
+      #
+      # `HEAD^1` is also strictly more accurate than the event payload's
+      # `base.sha`, which goes stale if the base branch moves after the event
+      # fires. HEAD^1 is the base the merge ref was actually computed against.
+      #
+      # HEAD must be a MERGE commit before HEAD^1 means "the base". On a
+      # non-merge HEAD, `HEAD^1` still resolves — to the previous commit in
+      # linear history — which would silently scope the run to one commit's
+      # files instead of the PR's. That false-narrow is worse than sweeping:
+      # it is a green check over too few files. So the parent count is
+      # asserted, not assumed, and anything else falls back to a whole-repo
+      # sweep. A failed narrow must never be the quiet path: linting
       # everything is noisy but honest, linting nothing is a green check over
       # zero files.
       - name: Resolve scope
@@ -134,15 +153,23 @@ jobs:
               exit 0
               ;;
           esac
-          # Capture stderr rather than discarding it: a fallback that cannot
-          # say WHY it fired is a rate you can only sample, not a fault you can
-          # diagnose. Keep it to one line so the annotation stays readable.
-          if fetch_err=$(git -C repo fetch --depth=1 origin "${BASE_SHA}" 2>&1); then
-            echo "changed_since=${BASE_SHA}" >> "${GITHUB_OUTPUT}"
-            echo "scoping to files changed since ${BASE_SHA}"
-          else
-            fetch_err=$(printf '%s' "${fetch_err}" | tr '\n' ' ' | tr -s ' ')
-            echo "::warning::could not fetch base ${BASE_SHA}; falling back to whole-repo sweep — git said: ${fetch_err}"
+          # Require a merge commit: exactly the shape refs/pull/N/merge has.
+          # `rev-list --parents -n 1` prints "<sha> <parent>..."; a merge has
+          # two or more parents, so anything under 2 is not a merge ref.
+          parents=$(git -C repo rev-list --parents -n 1 HEAD | wc -w)
+          if [ "${parents}" -lt 3 ]; then
+            echo "::warning::HEAD is not a merge ref ($((parents - 1)) parent(s)); falling back to whole-repo sweep"
+            exit 0
+          fi
+          if ! base=$(git -C repo rev-parse --verify --quiet "HEAD^1^{commit}"); then
+            echo "::warning::could not resolve HEAD^1; falling back to whole-repo sweep"
+            exit 0
+          fi
+          echo "changed_since=${base}" >> "${GITHUB_OUTPUT}"
+          echo "scoping to files changed since ${base} (HEAD^1)"
+          if [ "${base}" != "${BASE_SHA}" ]; then
+            echo "note: HEAD^1 ${base} differs from event base.sha ${BASE_SHA};" \
+                 "the base branch moved after the event fired — HEAD^1 is authoritative"
           fi
 
       - name: Resolve the standards SHA

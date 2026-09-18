@@ -128,7 +128,18 @@ if _skipped shellcheck; then echo "== shellcheck: skipped by input"; else
     esac
   done < <(_tracked || true)
   if ((${#files[@]} == 0)); then echo "::notice::no shell files"; else
-    (cd "${repo}" && shellcheck -S info "${files[@]}") || _fail shellcheck
+    # Config precedence, as for the other linters: a repo-root .shellcheckrc
+    # wins, else the canonical file here. Passing it explicitly matters more
+    # than elsewhere -- shellcheck searches ANCESTOR directories, so a bare
+    # invocation under a checkout whose parent carries a .shellcheckrc picks
+    # up settings CI never intended (claude-config#534).
+    #
+    # Note these do not merge: --rcfile replaces the search, and a repo-root
+    # file halts it. A repo-local config therefore restates the whole policy.
+    cfg=""
+    if [[ -f "${repo}/.shellcheckrc" ]]; then cfg="${repo}/.shellcheckrc"; fi
+    [[ -n "${cfg}" ]] || cfg="${config_dir}/shellcheckrc"
+    (cd "${repo}" && shellcheck --rcfile "${cfg}" -S info "${files[@]}") || _fail shellcheck
   fi
 fi
 

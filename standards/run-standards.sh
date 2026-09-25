@@ -55,7 +55,6 @@ if ! git -C "${repo}" rev-parse --git-dir >/dev/null 2>&1; then
   exit 2
 fi
 
-failures=0
 _skipped() { [[ ",${skip}," == *",$1,"* ]]; }
 # Say which mode is in effect. A run that lints 3 files and one that lints 300
 # both print "all enabled linters clean", so without this line the scope of a
@@ -66,7 +65,85 @@ else
   echo "scope: all tracked files (whole-repo hygiene mode)"
 fi
 _header() { echo; echo "== $1"; }
-_fail() { echo "::error::$1 found problems"; failures=$((failures + 1)); }
+
+# Say WHAT failed, not just that something did (dev-env#113). A red check
+# whose only text is "shellcheck found problems" sends the reader into the raw
+# job log to find the rule and the file. So each linter's output is captured
+# as it streams, and a failure is reported three ways:
+#   - the linter's ::error:: annotation carries the start of its findings, so
+#     the check's annotation list shows the rule and the file;
+#   - the final ::error:: line names every linter that failed;
+#   - when GITHUB_STEP_SUMMARY is set (CI), the run summary gets each failed
+#     linter's output. Nothing is written there on a clean run.
+failed=()
+out_dir="$(mktemp -d)"
+trap 'rm -rf "${out_dir}"' EXIT
+annotation_lines=20
+summary_lines=200
+
+# Workflow-command data must encode %, CR and LF, or a multi-line message is
+# cut at the first newline and a literal "%0A" in the findings is misread.
+_annotation_escape() {
+  local s="$1"
+  s="${s//'%'/%25}"
+  s="${s//$'\r'/%0D}"
+  s="${s//$'\n'/%0A}"
+  printf '%s' "${s}"
+}
+
+# _fail NAME [LOG]: record a failed linter and annotate it with the head of
+# its captured output.
+_fail() {
+  local name="$1" log="${2:-}" msg total
+  failed+=("${name}")
+  msg="${name} found problems"
+  if [[ -n "${log}" && -s "${log}" ]]; then
+    total="$(wc -l <"${log}" | tr -d ' ')"
+    msg+=$'\n'"$(head -n "${annotation_lines}" "${log}")"
+    if ((total > annotation_lines)); then
+      msg+=$'\n'"... $((total - annotation_lines)) more line(s); see the job log or run summary"
+    fi
+  fi
+  echo "::error title=${name}::$(_annotation_escape "${msg}")"
+}
+
+# _lint NAME CMD...: run CMD from the repo root, streaming its output to the
+# log as before while keeping a copy for _fail. pipefail (set above) makes the
+# pipeline's status the linter's, not tee's.
+_lint() {
+  local name="$1"
+  shift
+  if (cd "${repo}" && "$@") 2>&1 | tee "${out_dir}/${name}.log"; then
+    return 0
+  fi
+  _fail "${name}" "${out_dir}/${name}.log"
+}
+
+_write_summary() {
+  [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] || return 0
+  local name log total
+  {
+    echo "## standards-check failed: $(IFS=,; echo "${failed[*]}" | sed 's/,/, /g')"
+    for name in "${failed[@]}"; do
+      log="${out_dir}/${name}.log"
+      echo
+      echo "### ${name}"
+      echo
+      if [[ -s "${log}" ]]; then
+        echo '````text'
+        head -n "${summary_lines}" "${log}"
+        echo '````'
+        total="$(wc -l <"${log}" | tr -d ' ')"
+        if ((total > summary_lines)); then
+          echo
+          echo "_Truncated: $((total - summary_lines)) more line(s) in the job log._"
+        fi
+      else
+        echo "_No output captured; see the job log._"
+      fi
+    done
+  } >>"${GITHUB_STEP_SUMMARY}"
+}
 
 # Fail loudly on a --changed-since ref git cannot resolve. Left to fall
 # through, an unresolvable ref yields an empty changed set, every file-based
@@ -139,7 +216,7 @@ if _skipped shellcheck; then echo "== shellcheck: skipped by input"; else
     cfg=""
     if [[ -f "${repo}/.shellcheckrc" ]]; then cfg="${repo}/.shellcheckrc"; fi
     [[ -n "${cfg}" ]] || cfg="${config_dir}/shellcheckrc"
-    (cd "${repo}" && shellcheck --rcfile "${cfg}" -S info "${files[@]}") || _fail shellcheck
+    _lint shellcheck shellcheck --rcfile "${cfg}" -S info "${files[@]}"
   fi
 fi
 
@@ -159,7 +236,7 @@ if _skipped yamllint; then echo "== yamllint: skipped by input"; else
       if [[ -f "${repo}/${c}" ]]; then cfg="${repo}/${c}"; break; fi
     done
     [[ -n "${cfg}" ]] || cfg="${config_dir}/yamllint.yml"
-    (cd "${repo}" && yamllint -c "${cfg}" -f parsable "${files[@]}") || _fail yamllint
+    _lint yamllint yamllint -c "${cfg}" -f parsable "${files[@]}"
   fi
 fi
 
@@ -167,7 +244,7 @@ fi
 if _skipped actionlint; then echo "== actionlint: skipped by input"; else
   _header actionlint
   if compgen -G "${repo}/.github/workflows/*.y*ml" >/dev/null; then
-    (cd "${repo}" && actionlint -shellcheck= -pyflakes=) || _fail actionlint
+    _lint actionlint actionlint -shellcheck= -pyflakes=
   else echo "::notice::no workflows"; fi
 fi
 
@@ -186,7 +263,7 @@ if _skipped zizmor; then echo "== zizmor: skipped by input"; else
   done < <(_tracked || true)
   if ((${#files[@]} == 0)); then echo "::notice::no workflows"; else
     cfg="${repo}/zizmor.yml"; [[ -f "${cfg}" ]] || cfg="${config_dir}/../zizmor.yml"
-    (cd "${repo}" && zizmor --config "${cfg}" --min-severity low --no-online-audits "${files[@]}") || _fail zizmor
+    _lint zizmor zizmor --config "${cfg}" --min-severity low --no-online-audits "${files[@]}"
   fi
 fi
 
@@ -206,19 +283,20 @@ if _skipped markdownlint; then echo "== markdownlint: skipped by input"; else
       if [[ -f "${repo}/${c}" ]]; then cfg="${repo}/${c}"; break; fi
     done
     [[ -n "${cfg}" ]] || cfg="${config_dir}/markdownlint.json"
-    (cd "${repo}" && markdownlint-cli2 --config "${cfg}" "${files[@]}") || _fail markdownlint
+    _lint markdownlint markdownlint-cli2 --config "${cfg}" "${files[@]}"
   fi
 fi
 
 # node-floor
 if _skipped node-floor; then echo "== node-floor: skipped by input"; else
   _header node-floor
-  bash "${config_dir}/check-node-floor.sh" "${repo}" "${node_floor}" || _fail node-floor
+  _lint node-floor bash "${config_dir}/check-node-floor.sh" "${repo}" "${node_floor}"
 fi
 
 echo
-if ((failures > 0)); then
-  echo "::error::standards-check: ${failures} linter(s) failed"
+if ((${#failed[@]} > 0)); then
+  _write_summary
+  echo "::error::standards-check failed: $(IFS=,; echo "${failed[*]}" | sed 's/,/, /g')"
   exit 1
 fi
 echo "standards-check: all enabled linters clean"

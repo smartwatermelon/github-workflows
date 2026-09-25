@@ -36,6 +36,45 @@ d='$'
 _mk bad-sh; printf '#!/usr/bin/env bash\necho %s1\n' "${d}" >"${tmp}/bad-sh/x.sh"; git -C "${tmp}/bad-sh" add -A
 _expect_fail "shellcheck: unquoted \$1 (SC2086) rejected" bad-sh
 
+# A failed check must say WHAT failed, not just that something did
+# (dev-env#113). Three places carry it: the final ::error:: line names every
+# failed linter; each linter's own ::error:: annotation carries the start of
+# its findings, so the annotation list on the check shows the rule and file;
+# and when GITHUB_STEP_SUMMARY is set, the run summary gets each failed
+# linter's output. The bad-sh fixture has exactly one finding, SC2086.
+summary="${tmp}/bad-sh.summary.md"
+: >"${summary}"
+GITHUB_STEP_SUMMARY="${summary}" bash "${runner}" --repo "${tmp}/bad-sh" --config-dir "${cfg}" \
+  >"${tmp}/bad-sh-named.log" 2>&1 || true
+if grep -q '^::error::standards-check failed: shellcheck$' "${tmp}/bad-sh-named.log"; then
+  _ok "final error line names the failed linter"
+else
+  _bad "final error line does not name the failed linter (see ${tmp}/bad-sh-named.log)"
+fi
+if grep -q '^::error title=shellcheck::.*SC2086' "${tmp}/bad-sh-named.log"; then
+  _ok "per-linter annotation carries the finding (SC2086)"
+else
+  _bad "per-linter annotation does not carry the finding (see ${tmp}/bad-sh-named.log)"
+fi
+if grep -q 'shellcheck' "${summary}" && grep -q 'SC2086' "${summary}"; then
+  _ok "step summary names the failed linter and its finding"
+else
+  _bad "step summary lacks the failed linter or its finding (see ${summary})"
+fi
+# A clean run must write no failure section: a summary that always lists
+# linters would name "failures" on a green check.
+summary_clean="${tmp}/clean-summary.md"
+: >"${summary_clean}"
+mkdir -p "${tmp}/summary-clean"; git -C "${tmp}/summary-clean" init -q --template="${tmpl}"
+printf '# Title\n\nBody.\n' >"${tmp}/summary-clean/README.md"; git -C "${tmp}/summary-clean" add -A
+GITHUB_STEP_SUMMARY="${summary_clean}" bash "${runner}" --repo "${tmp}/summary-clean" --config-dir "${cfg}" \
+  >"${tmp}/summary-clean.log" 2>&1 || true
+if [[ ! -s "${summary_clean}" ]]; then
+  _ok "clean run writes no failure section to the step summary"
+else
+  _bad "clean run wrote to the step summary (see ${summary_clean})"
+fi
+
 _mk bad-yaml; printf 'a: 1\n  b: 2\n' >"${tmp}/bad-yaml/x.yml"; git -C "${tmp}/bad-yaml" add -A
 _expect_fail "yamllint: bad indentation rejected" bad-yaml
 

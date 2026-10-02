@@ -16,6 +16,8 @@
 # opened fails their unrelated change. Measured across the fleet, that was the
 # single largest source of standards-check failures.
 #
+# claude-ignore: warn-only, whole-repo.
+#
 # Scope: the flag narrows the four linters that enumerate through _tracked
 # (shellcheck, yamllint, zizmor, markdownlint). actionlint and the Node-floor
 # check find their own inputs and stay whole-repo — both are cheap, and
@@ -291,6 +293,12 @@ fi
 if _skipped node-floor; then echo "== node-floor: skipped by input"; else
   _header node-floor
   _lint node-floor bash "${config_dir}/check-node-floor.sh" "${repo}" "${node_floor}"
+fi
+
+# claude-ignore: warning-only (dev-env#178); never adds to failed[].
+if _skipped claude-ignore; then echo "== claude-ignore: skipped by input"; else
+  _header claude-ignore
+  bash "${config_dir}/check-claude-ignore.sh" "${repo}"
 fi
 
 echo

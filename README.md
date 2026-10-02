@@ -2,7 +2,13 @@
 
 Reusable GitHub Actions workflows.
 
-## `claude-blocking-review`
+## `claude-blocking-review` (DEPRECATED)
+
+> **Deprecated (#154).** Do not add this to new repos. Use
+> `standards-check.yml` instead. The file stays only because
+> `smartwatermelon/crazy-larry` and `nightowlstudiollc/networth-agent` still
+> require its check, as may the kebab-tax repos. Do not delete it while any
+> caller exists. The bulk-install and audit scripts are retired.
 
 Runs a Claude Code Review on every PR and **blocks merges** when Claude finds
 bugs, reliability regressions, security vulnerabilities, or data-loss risks.
@@ -355,16 +361,11 @@ incidents (Ultralytics, nx, tj-actions) when combined with a checkout
 of PR-controlled code. This workflow is safe today because it never
 executes PR code: the only actions are API calls (`dependabot/fetch-metadata`,
 `gh pr review`, `gh pr merge`). **`actions/checkout` must never be added
-to this file.** Two guardrails enforce this (closes #64):
+to this file.** The guardrail below enforces this (closes #64):
 
 - `self-review.yml`'s `guard-no-checkout` job greps this repo's own
   copy of `dependabot-auto-merge.yml` and fails the PR if
   `actions/checkout` appears.
-- `claude-review-audit.sh` performs a read-only, fleet-wide check: any
-  caller stub referencing `dependabot-auto-merge.yml` that contains
-  `actions/checkout` or `secrets: inherit` is flagged in the audit
-  report. This check does not block or gate anything — it's audit-only,
-  same as the rest of that script.
 
 ### Versioning
 
@@ -672,76 +673,15 @@ are not compatible with this reusable workflow.
 
 ---
 
-## Audit script
-
-`claude-review-audit.sh` audits Claude Review configuration across all
-non-archived repos under `smartwatermelon` and `nightowlstudiollc`. Read-only —
-reports gaps but makes no changes.
-
-```bash
-./claude-review-audit.sh [--verbose]
-```
-
-Requires: `gh` CLI (authenticated), `jq`, `bash` 4.0+.
-
-### Excluding repos
-
-Add repos to `.claude-review-ignore` (one `owner/repo` per line) to skip them
-in audits. Useful for repos that should never have the review installed.
-
----
-
-## Bulk-install script (`smartwatermelon` only)
-
-`bulk-install-claude-review.sh` installs (or refreshes) the
-`claude-blocking-review` caller workflow across all non-archived repos under
-`smartwatermelon`. Workaround for the fact that GitHub's workflow-templates
-picker is **organization-only** — `smartwatermelon` is a user account, so
-the templates in `smartwatermelon/.github/workflow-templates/` never appear
-in the "New workflow" picker for `smartwatermelon/*` repos.
-
-```bash
-./bulk-install-claude-review.sh                          # dry-run (default)
-./bulk-install-claude-review.sh --apply                  # open PRs
-./bulk-install-claude-review.sh --only smartwatermelon/foo --apply
-```
-
-The script classifies each repo:
-
-| Class | Action |
-| ------- | -------- |
-| `CURRENT` | Already on the target version. No-op. |
-| `STALE` | Different pin or floating tag. Opens a PR bumping the pin. |
-| `MISSING` | No caller workflow at all. Opens a PR adding the canonical stub. |
-| `CUSTOMIZED` | Has caller-side modifications (`paths-ignore`, `extra_instructions`, custom `model`/`timeout_minutes`, etc.). Skipped regardless of pin — flag for human review. |
-| `LOCAL` | Uses a local-path reference (`./...`). Not bumpable; e.g. the `github-workflows` repo's own self-review. |
-
-Target version is derived dynamically from the `@v…` pin in
-`smartwatermelon/.github/workflow-templates/claude-blocking-review.yml`,
-so a PR bumping that template is the single trigger to roll a new version
-across the fleet.
-
-PRs include `[skip-claude-review: bulk-install]` in the body so the
-blocking-review workflow doesn't gate its own install/bump PR.
-
-For `nightowlstudiollc`, this script is intentionally not used — that org gets
-the workflow-templates picker via [`nightowlstudiollc/.github`](https://github.com/nightowlstudiollc/.github)
-(mirrors `smartwatermelon/.github` workflow-templates; verified appearing under
-"By Night Owl Studio" in the Actions → New workflow UI). Repository Rulesets
-for org-wide enforcement were attempted once and rolled back (see
-`docs/plans/2026-04-30-required-workflows-nightowlstudiollc.md`); a
-re-attempt is deliberately not planned here and would need its own review
-given that history.
-
 ## New-repo bootstrap script (`smartwatermelon` only)
 
-`new-smartwatermelon-repo.sh` is the creation-time counterpart to the
-bulk-install script above — for a genuinely *new* `smartwatermelon` repo,
-rather than retrofitting an existing one. `smartwatermelon` being a User
+`new-smartwatermelon-repo.sh` is the creation-time script for a
+genuinely *new* `smartwatermelon` repo (the old fleet bulk-install script
+is retired). `smartwatermelon` being a User
 account means it can't use GitHub's org-only workflow-templates picker
 *or* Repository Rulesets to auto-attach anything on repo creation, so this
 script is the closest available approximation: one command instead of
-"create repo, then remember to run the bulk-install script, then remember
+"create repo, then remember to install the workflows, then remember
 the one repo setting no template can seed."
 
 ```bash

@@ -1,7 +1,9 @@
 # Retire the CI Claude reviewer (#154, Phase 5)
 
-Status: PLAN, 2026-10-01. Phases 1–4 of #154 are done: `standards-check.yml`
-exists (#162, #164, #165) and W3 flipped the required check fleet-wide.
+Status: PLAN, 2026-10-01. Step 1 done (smartwatermelon/repo-template#11,
+smartwatermelon/.github#19). Step 2 done (25 caller PRs merged 2026-10-02).
+Phases 1–4 of #154 are done: `standards-check.yml` exists (#162, #164, #165)
+and W3 flipped the required check fleet-wide.
 
 ## Decisions already made
 
@@ -123,12 +125,10 @@ Comment with the survey before/after, the holdouts and why, and a pointer to
 this plan. Close it. Leave a note that the reusable file can be deleted once
 the last caller is gone.
 
-## Open question for Andrew
+## Decided
 
-**`crazy-larry`:** flip it to `standards-check` now and retire its caller in
-the sweep, or leave it on `claude-review` like `networth-agent`? Its
-`standards-check.yml` exists but has never run, so the flip needs one PR to
-prove it green first.
+`crazy-larry` stays on `claude-review`, like `networth-agent` (Andrew,
+2026-10-01).
 
 ## Cost and size
 

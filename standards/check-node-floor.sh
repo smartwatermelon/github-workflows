@@ -83,9 +83,14 @@ _scan_workflow() {
       sub(/^["\047]/, "", s); sub(/["\047]$/, "", s)
       return s
     }
+    function nocomment(s) { if (match(s, /[ \t]+#/)) s = substr(s, 1, RSTART - 1); return trim(s) }
+    # A flow list left open at the end of the matrix is not read in full.
+    function close_flow() { if (fbuf != "") { part[job, fk] = 1; fbuf = "" } }
     function add(k, v,   parts, i, m) {
       if (pass != 1) return
       v = clean(v)
+      # A flow list may wrap; collect lines until its closing bracket.
+      if (v ~ /^\[/ && v !~ /\]$/) { fbuf = v; fk = k; return }
       if (v ~ /^\[/) {
         sub(/^\[/, "", v); sub(/\][ \t]*$/, "", v)
         m = split(v, parts, ",")
@@ -94,14 +99,14 @@ _scan_workflow() {
       }
       n[job, k]++; val[job, k, n[job, k]] = v
     }
-    FNR == 1 { pass++; in_jobs = 0; job = ""; job_ind = -1; mat_ind = -1 }
+    FNR == 1 { close_flow(); pass++; in_jobs = 0; job = ""; job_ind = -1; mat_ind = -1 }
     /^[ \t]*(#|$)/ { next }
     {
       match($0, /^ */); ind = RLENGTH; t = substr($0, ind + 1)
-      if (ind == 0) { in_jobs = (t ~ /^jobs:[ \t]*$/); job = ""; job_ind = -1; mat_ind = -1; next }
+      if (ind == 0) { close_flow(); in_jobs = (t ~ /^jobs:[ \t]*$/); job = ""; job_ind = -1; mat_ind = -1; next }
       if (in_jobs && job_ind < 0) job_ind = ind
-      if (in_jobs && ind == job_ind && t ~ /^[^-][^:]*:/) { job = t; sub(/:.*/, "", job); mat_ind = -1; next }
-      if (mat_ind >= 0 && ind <= mat_ind) mat_ind = -1
+      if (in_jobs && ind == job_ind && t ~ /^[^-][^:]*:/) { close_flow(); job = t; sub(/:.*/, "", job); mat_ind = -1; next }
+      if (mat_ind >= 0 && ind <= mat_ind) { close_flow(); mat_ind = -1 }
       if (mat_ind < 0 && t ~ /^matrix:/) {
         rest = clean(substr(t, 8))
         if (rest == "") { mat_ind = ind; child = -1; mode = "" } else if (pass == 1) mx[job] = 1
@@ -109,6 +114,12 @@ _scan_workflow() {
       }
       if (mat_ind >= 0) {
         if (child < 0) child = ind
+        if (fbuf != "" && ind > child) {
+          fbuf = fbuf " " nocomment(t)
+          if (fbuf ~ /\]$/) { b = fbuf; fbuf = ""; add(fk, b) }
+          next
+        }
+        close_flow()
         if (ind == child && t ~ /^[A-Za-z0-9_-]+:/) {
           k = t; sub(/:.*/, "", k); rest = clean(substr(t, length(k) + 2))
           if (k == "include") { mode = "inc"; if (rest != "" && pass == 1) mxi[job] = 1 }
@@ -131,6 +142,7 @@ _scan_workflow() {
       if (inner !~ /^matrix\.[A-Za-z0-9_-]+$/) { print "L\t" v; next }
       k = substr(inner, 8)
       if (mx[job]) { print "U\t" v "\tthe matrix itself is an expression"; next }
+      if (part[job, k]) print "U\t" v "\tmatrix list for " k " is not closed"
       if (n[job, k] == 0) { print "U\t" v "\tno literal matrix values for " k " in job " job; next }
       for (i = 1; i <= n[job, k]; i++) print "R\t" v "\t" val[job, k, i]
       if (mxi[job]) print "U\t" v "\tmatrix include is an expression"

@@ -311,5 +311,35 @@ else
   _ok "failed workflow scan fails loudly"
 fi
 
+# Fixture 24: a flow list that wraps across lines is read in full
+_wf m24 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node: [22, # current
+          '18']
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+EOF
+_expect fail m24 "wrapped flow list with an 18 entry rejected"
+_wf m24b <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node: [22,
+          24]
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+EOF
+_expect pass m24b "wrapped flow list 22/24 passes"
+
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-claude-ignore.sh <repo-dir>: warn-only; see dev-env#178.
+# check-claude-ignore.sh <repo-dir>: warn-only (never fails); see dev-env#178.
 set -euo pipefail
 
 repo="${1:?usage: check-claude-ignore.sh <repo-dir>}"
@@ -34,12 +34,17 @@ if ((rc == 1)); then
   echo "::warning title=claude-ignore::$(_esc ".claude/ is not ignored by the committed .gitignore. ${fix}")"
   warned=1
 elif ((rc != 0)); then
-  echo "::error::git check-ignore failed (exit ${rc})"
-  exit 2
+  echo "::warning title=claude-ignore::git check-ignore failed (exit ${rc}); not checked"
+  exit 0
 fi
 
 # Tracked files matching an ignore rule.
-tracked="$(_git ls-files -ci --exclude-standard -- .claude/)"
+lsrc=0
+tracked="$(_git ls-files -ci --exclude-standard -- .claude/)" || lsrc=$?
+if ((lsrc != 0)); then
+  echo "::warning title=claude-ignore::git ls-files failed (exit ${lsrc}); tracked files not checked"
+  exit 0
+fi
 if [[ -n "${tracked}" ]]; then
   echo "::warning title=claude-ignore::$(_esc "Tracked file(s) under .claude/ match an ignore rule:"$'\n'"${tracked}"$'\n'"${fix}")"
   warned=1

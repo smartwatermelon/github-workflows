@@ -269,5 +269,47 @@ jobs:
 EOF
 _expect fail m20 "matrix declared after steps rejected"
 
+# Fixture 21: indentless block list (dashes at the key's indent)
+_wf m21 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node:
+        - 22
+        - 18
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+EOF
+_expect fail m21 "indentless matrix list with an 18 entry rejected"
+
+# Fixture 22: indentless include beside a conformant list
+_wf m22 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node: [22]
+        include:
+        - node: 18
+          os: windows-latest
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+EOF
+_expect fail m22 "indentless matrix include '- node: 18' rejected"
+
+# Fixture 23: a failing workflow scan (awk error) must fail, not read as clean
+mkdir -p "${tmp}/m23bin"
+printf '#!/bin/sh\nexit 1\n' >"${tmp}/m23bin/awk"; chmod +x "${tmp}/m23bin/awk"
+if env PATH="${tmp}/m23bin:${PATH}" bash "${checker}" "${tmp}/m10" 22 >/dev/null 2>&1; then
+  _bad "failed workflow scan read as a clean pass"
+else
+  _ok "failed workflow scan fails loudly"
+fi
+
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

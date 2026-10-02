@@ -114,7 +114,8 @@ _scan_workflow() {
           if (k == "include") { mode = "inc"; if (rest != "" && pass == 1) mxi[job] = 1 }
           else if (k == "exclude") mode = "exc"
           else { mode = "list"; mk = k; if (rest != "") add(k, rest) }
-        } else if (ind > child) {
+        } else if (ind > child || t ~ /^-[ \t]/) {
+          # A sequence item may sit at the same indent as its key (indentless).
           if (mode == "list" && t ~ /^-[ \t]/) add(mk, substr(t, 3))
           else if (mode == "inc") {
             s = t; sub(/^-[ \t]+/, "", s)
@@ -140,7 +141,10 @@ _scan_workflow() {
 shopt -s nullglob
 for wf in "${repo}"/.github/workflows/*.yml "${repo}"/.github/workflows/*.yaml; do
   rel="${wf#"${repo}"/}"
+  # Capture first: a failed scan must stop the check, not read as "no pins".
+  recs="$(_scan_workflow "${wf}")" || { echo "::error::${rel}: workflow scan failed"; exit 2; }
   while IFS=$'\t' read -r kind val mval; do
+    [[ -z "${kind}" ]] && continue
     case "${kind}" in
       U)
         echo "::notice::${rel}: node-version is an expression (${val}); not checked (${mval})"
@@ -168,7 +172,7 @@ for wf in "${repo}"/.github/workflows/*.yml "${repo}"/.github/workflows/*.yaml; 
       echo "::notice::${rel}: node-version '${val}' is not a recognisable version or alias; not checked"
     fi
     _check "${major}" "${rel}: node-version: ${val}"
-  done < <(_scan_workflow "${wf}")
+  done <<<"${recs}"
   while IFS= read -r line; do
     vf="$(printf '%s' "${line}" | sed -E 's/.*node-version-file:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^["'"'"']//; s/["'"'"']$//')"
     if [[ -f "${repo}/${vf}" ]]; then

@@ -113,6 +113,9 @@ printf 'on: push\npermissions:\n  contents: read\njobs:\n  a:\n    runs-on: ubun
 echo "lts/krypton" >"${tmp}/clean/.nvmrc"
 git -C "${tmp}/clean" add -A
 _expect_pass "clean repo passes every linter" clean
+# claude-ignore (dev-env#178) is warning-only: the clean fixture has no
+# .gitignore, so the run must warn AND still pass.
+if grep -q '^::warning title=claude-ignore::' "${tmp}/clean.log"; then _ok "claude-ignore warns without failing the run"; else _bad "claude-ignore warning missing from the clean run"; fi
 
 if bash "${runner}" --repo "${tmp}/bad-sh" --config-dir "${cfg}" --skip shellcheck >/dev/null 2>&1; then _ok "--skip shellcheck disables the linter"; else _bad "--skip shellcheck did not disable it"; fi
 

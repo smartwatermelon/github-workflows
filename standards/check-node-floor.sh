@@ -8,8 +8,8 @@
 #   - .nvmrc, .node-version           : bare versions ("20", "20.19.4", "v18")
 #   - package.json                    : engines.node lower bound (">=14.0.0")
 # Named aliases (lts/*, node, latest, current) are accepted: they float and
-# are never below the floor. Expressions (${{ ... }}) are skipped with a
-# notice because they cannot be resolved statically.
+# are never below the floor. `${{ matrix.<key> }}` is resolved from the
+# job's literal strategy.matrix; other expressions get a notice only.
 set -euo pipefail
 
 repo="${1:?usage: check-node-floor.sh <repo-dir> <floor-major>}"
@@ -71,11 +71,92 @@ fi
 # concatenation so no single-quoted "${{" appears in the source (SC2016).
 expr_open='$'"{{"
 
+# _scan_workflow <file>: one tab-separated record per node-version line,
+# kind L (literal), R (resolved matrix value) or U (unresolvable).
+_scan_workflow() {
+  awk -v eo="${expr_open}" '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    # Same cleanup as the literal reader: drop a " #" comment, one quote pair.
+    function clean(s) {
+      if (match(s, /[ \t]+#/)) s = substr(s, 1, RSTART - 1)
+      s = trim(s)
+      sub(/^["\047]/, "", s); sub(/["\047]$/, "", s)
+      return s
+    }
+    function add(k, v,   parts, i, m) {
+      if (pass != 1) return
+      v = clean(v)
+      if (v ~ /^\[/) {
+        sub(/^\[/, "", v); sub(/\][ \t]*$/, "", v)
+        m = split(v, parts, ",")
+        for (i = 1; i <= m; i++) { parts[i] = clean(parts[i]); if (parts[i] != "") add(k, parts[i]) }
+        return
+      }
+      n[job, k]++; val[job, k, n[job, k]] = v
+    }
+    FNR == 1 { pass++; in_jobs = 0; job = ""; job_ind = -1; mat_ind = -1 }
+    /^[ \t]*(#|$)/ { next }
+    {
+      match($0, /^ */); ind = RLENGTH; t = substr($0, ind + 1)
+      if (ind == 0) { in_jobs = (t ~ /^jobs:[ \t]*$/); job = ""; job_ind = -1; mat_ind = -1; next }
+      if (in_jobs && job_ind < 0) job_ind = ind
+      if (in_jobs && ind == job_ind && t ~ /^[^-][^:]*:/) { job = t; sub(/:.*/, "", job); mat_ind = -1; next }
+      if (mat_ind >= 0 && ind <= mat_ind) mat_ind = -1
+      if (mat_ind < 0 && t ~ /^matrix:/) {
+        rest = clean(substr(t, 8))
+        if (rest == "") { mat_ind = ind; child = -1; mode = "" } else if (pass == 1) mx[job] = 1
+        next
+      }
+      if (mat_ind >= 0) {
+        if (child < 0) child = ind
+        if (ind == child && t ~ /^[A-Za-z0-9_-]+:/) {
+          k = t; sub(/:.*/, "", k); rest = clean(substr(t, length(k) + 2))
+          if (k == "include") { mode = "inc"; if (rest != "" && pass == 1) mxi[job] = 1 }
+          else if (k == "exclude") mode = "exc"
+          else { mode = "list"; mk = k; if (rest != "") add(k, rest) }
+        } else if (ind > child) {
+          if (mode == "list" && t ~ /^-[ \t]/) add(mk, substr(t, 3))
+          else if (mode == "inc") {
+            s = t; sub(/^-[ \t]+/, "", s)
+            if (s ~ /^[A-Za-z0-9_-]+:/) { k = s; sub(/:.*/, "", k); add(k, substr(s, length(k) + 2)) }
+          }
+        }
+        next
+      }
+      if (pass != 2 || t !~ /^node-version:/) next
+      v = clean(substr(t, 14))
+      inner = ""
+      if (index(v, eo) == 1 && v ~ /[}][}]$/) { inner = substr(v, length(eo) + 1); sub(/[}][}]$/, "", inner); gsub(/[ \t]/, "", inner) }
+      if (inner !~ /^matrix\.[A-Za-z0-9_-]+$/) { print "L\t" v; next }
+      k = substr(inner, 8)
+      if (mx[job]) { print "U\t" v "\tthe matrix itself is an expression"; next }
+      if (n[job, k] == 0) { print "U\t" v "\tno literal matrix values for " k " in job " job; next }
+      for (i = 1; i <= n[job, k]; i++) print "R\t" v "\t" val[job, k, i]
+      if (mxi[job]) print "U\t" v "\tmatrix include is an expression"
+    }
+  ' "${1}" "${1}"
+}
+
 shopt -s nullglob
 for wf in "${repo}"/.github/workflows/*.yml "${repo}"/.github/workflows/*.yaml; do
   rel="${wf#"${repo}"/}"
-  while IFS= read -r line; do
-    val="$(printf '%s' "${line}" | sed -E 's/.*node-version:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^["'"'"']//; s/["'"'"']$//')"
+  while IFS=$'\t' read -r kind val mval; do
+    case "${kind}" in
+      U)
+        echo "::notice::${rel}: node-version is an expression (${val}); not checked (${mval})"
+        continue ;;
+      R)
+        if [[ "${mval}" == *"${expr_open}"* ]]; then
+          echo "::notice::${rel}: node-version ${val} takes an expression value (${mval}); not checked"
+          continue
+        fi
+        major="$(_major "${mval}")"
+        if [[ -z "${major}" && ! "${mval}" =~ ^(lts/.*|node|latest|current|\*)$ ]]; then
+          echo "::notice::${rel}: node-version ${val} value '${mval}' is not a recognisable version or alias; not checked"
+        fi
+        _check "${major}" "${rel}: node-version: ${val} -> ${mval}"
+        continue ;;
+    esac
     if [[ "${val}" == *"${expr_open}"* ]]; then
       echo "::notice::${rel}: node-version is an expression (${val}); not checked"
       continue
@@ -87,7 +168,7 @@ for wf in "${repo}"/.github/workflows/*.yml "${repo}"/.github/workflows/*.yaml; 
       echo "::notice::${rel}: node-version '${val}' is not a recognisable version or alias; not checked"
     fi
     _check "${major}" "${rel}: node-version: ${val}"
-  done < <(grep -E '^\s*node-version:' "${wf}" || true)
+  done < <(_scan_workflow "${wf}")
   while IFS= read -r line; do
     vf="$(printf '%s' "${line}" | sed -E 's/.*node-version-file:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^["'"'"']//; s/["'"'"']$//')"
     if [[ -f "${repo}/${vf}" ]]; then

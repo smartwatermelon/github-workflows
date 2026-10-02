@@ -71,5 +71,203 @@ else
   _ok "missing jq fails loudly instead of skipping engines.node"
 fi
 
+# Matrix fixtures. _wf <name> writes stdin to <name>/.github/workflows/ci.yml;
+# _expect <fail|pass> <name> <label> runs the checker against it.
+_wf() { mkdir -p "${tmp}/$1/.github/workflows"; cat >"${tmp}/$1/.github/workflows/ci.yml"; }
+_expect() {
+  local want="$1" dir="$2" label="$3" got=pass
+  bash "${checker}" "${tmp}/${dir}" 22 >/dev/null 2>&1 || got=fail
+  if [[ "${got}" == "${want}" ]]; then _ok "${label}"; else _bad "${label} (got ${got}, want ${want})"; fi
+}
+
+# Fixture 10: tensegrity shape - flow list [18.x] read via the matrix expression
+_wf m10 <<'EOF'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x]
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node-version }}
+EOF
+_expect fail m10 "matrix [18.x] via matrix.node-version rejected"
+
+# Fixture 11: every matrix entry at or above the floor -> pass
+_wf m11 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node-version: [22.x, '24.x']
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node-version }}
+EOF
+_expect pass m11 "matrix [22.x, 24.x] passes"
+
+# Fixture 12: one entry below the floor is enough to fail
+_wf m12 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node-version: [18.x, 22.x]
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node-version }}
+EOF
+_expect fail m12 "matrix [18.x, 22.x] rejected"
+
+# Fixture 13: block-style list, differently named key, spaced expression
+_wf m13 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        node:
+          - 22
+          - "20" # legacy
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{matrix.node}}
+EOF
+_expect fail m13 "block-style matrix list with a 20 entry rejected"
+
+# Fixture 14: block-style list, all conformant -> pass
+_wf m14 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node:
+          - 22
+          - 24
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+EOF
+_expect pass m14 "block-style matrix list 22/24 passes"
+
+# Fixture 15: include entry adds a below-floor value (dash form)
+_wf m15 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node-version: [22]
+        include:
+          - node-version: 18.x
+            os: windows-latest
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node-version }}
+EOF
+_expect fail m15 "matrix include '- node-version: 18.x' rejected"
+
+# Fixture 16: include entry with the key on a continuation line
+_wf m16 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node-version: 18.x
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node-version }}
+EOF
+_expect fail m16 "matrix include continuation 'node-version: 18.x' rejected"
+
+# Fixture 17: matrix scoping is per job - job b's 18 must not leak into job a,
+# and job b's own use of it must fail
+_wf m17 <<'EOF'
+jobs:
+  a:
+    strategy:
+      matrix:
+        node: [24]
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+  b:
+    strategy:
+      matrix:
+        node: [18]
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+EOF
+_expect fail m17 "second job's matrix [18] rejected"
+_wf m17b <<'EOF'
+jobs:
+  a:
+    strategy:
+      matrix:
+        node: [24]
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+  b:
+    strategy:
+      matrix:
+        node: [18]
+    steps:
+      - run: echo "${{ matrix.node }}"
+EOF
+_expect pass m17b "another job's unused matrix [18] does not leak into job a"
+
+# Fixture 18: matrix values behind fromJSON cannot be resolved -> notice, pass
+_wf m18 <<'EOF'
+jobs:
+  test:
+    strategy:
+      matrix:
+        node: ${{ fromJSON(needs.setup.outputs.nodes) }}
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node }}
+EOF
+_expect pass m18 "fromJSON matrix value left as a notice"
+
+# Fixture 19: a non-matrix expression keeps the notice behavior
+_wf m19 <<'EOF'
+jobs:
+  test:
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ inputs.node }}
+EOF
+_expect pass m19 "non-matrix expression left as a notice"
+
+# Fixture 20: strategy declared after steps still resolves
+_wf m20 <<'EOF'
+jobs:
+  test:
+    steps:
+      - uses: actions/setup-node@abc
+        with:
+          node-version: ${{ matrix.node-version }}
+    strategy:
+      matrix:
+        node-version: [20]
+EOF
+_expect fail m20 "matrix declared after steps rejected"
+
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

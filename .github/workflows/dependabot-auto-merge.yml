@@ -32,8 +32,7 @@ name: Dependabot Auto-Merge
 # out PR code here would expose those secrets to malicious dependency
 # PRs (see the Ultralytics, nx, and tj-actions incidents). This
 # invariant is also enforced by a CI guardrail — see self-review.yml's
-# `guard-no-checkout` job in this repo, and the read-only fleet-wide
-# check in claude-review-audit.sh. Closes #64.
+# `guard-no-checkout` job in this repo. Closes #64.
 #
 # Callers MUST NOT use `secrets: inherit`. This workflow needs no
 # secrets beyond the ambient `GITHUB_TOKEN` it mints itself — it does

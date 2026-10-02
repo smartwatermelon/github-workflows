@@ -1,5 +1,11 @@
 name: Claude Blocking Review
 
+# DEPRECATED (smartwatermelon/github-workflows#154). Do not delete while any caller exists.
+
+# Callers left: smartwatermelon/crazy-larry, nightowlstudiollc/networth-agent.
+
+# Both still require its check. The kebab-tax repos may also call it.
+
 # Reusable workflow: blocks PR merges when Claude finds bugs, reliability
 # regressions, security issues, or data-loss risks.
 #

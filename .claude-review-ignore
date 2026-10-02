@@ -2,8 +2,8 @@
 # One per line: owner/repo
 # Lines starting with # are comments. Blank lines are ignored.
 #
-# The audit script (claude-review-audit.sh) skips these repos entirely.
-# Use this for repos that should never have the review installed.
+# Historical: the audit script that read this file was retired in #154.
+# Only the broken nightowl-ruleset-rollout.sh.broken still names it.
 
 nightowlstudiollc/networth-agent
 smartwatermelon/headroom

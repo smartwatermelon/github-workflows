@@ -42,7 +42,7 @@ subscription quota.
 
 | Parameter   | Logic                         | Range               |
 | ----------- | ----------------------------- | ------------------- |
-| **Model**   | Sonnet (callers can override) | `claude-sonnet-4-6` |
+| **Model**   | Sonnet (callers can override) | `claude-sonnet-5-5` |
 | **Timeout** | `10 + lines/100` minutes      | 10–30 minutes       |
 
 Callers can override any parameter:
@@ -50,7 +50,7 @@ Callers can override any parameter:
 ```yaml
 with:
   pr_number: ${{ github.event.pull_request.number }}
-  model: claude-sonnet-4-6     # force sonnet for all diffs
+  model: claude-sonnet-5-5     # force sonnet for all diffs
   timeout_minutes: 15          # override timeout estimate
 ```
 

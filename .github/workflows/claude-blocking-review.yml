@@ -20,7 +20,7 @@ name: Claude Blocking Review
 # are free — generous wall-clock is the right posture.
 #
 # By default, review parameters are auto-estimated from the PR diff size:
-#   - Model: claude-sonnet-4-6 (callers can override)
+#   - Model: claude-sonnet-5-5 (callers can override)
 #   - timeout: 10 + lines/100 minutes (min 10, max 30)
 # Callers can override `model` and `timeout_minutes` explicitly. Override
 # range for timeout_minutes is 1-30. Removed in v3: the `max_turns` input.
@@ -122,7 +122,7 @@ on:
         required: false
         default: 0
       model:
-        description: 'Claude model ID. "auto" = sonnet. Callers can override with a specific model.'
+        description: 'Claude model ID. "auto" = claude-sonnet-5-5. Callers can override with a specific model.'
         type: string
         required: false
         default: 'auto'
@@ -459,8 +459,8 @@ jobs:
             MODEL="$MODEL_INPUT"
             echo "Model override: $MODEL"
           else
-            MODEL="claude-sonnet-4-6"
-            echo "Model: claude-sonnet-4-6"
+            MODEL="claude-sonnet-5-5"
+            echo "Model: claude-sonnet-5-5"
           fi
 
           # --- Timeout estimation (v3) ---

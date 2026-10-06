@@ -537,6 +537,9 @@ The triggering event picks the mode:
 | `pull_request` | preview | The commit status Netlify posts on the PR head, context `netlify/<netlify-site>/deploy-preview` | its `target_url` |
 | `push` | production | The Netlify API deploy with `context == "production"` and `commit_ref` equal to the pushed SHA, until `state` is `ready` | the site's `ssl_url` (primary custom domain), else `url` |
 
+Once the deploy is ready, the workflow runs the [baseline check](#baseline-check)
+against it, then the caller's check script if there is one.
+
 Any other event fails. Both waits give up after 10 minutes. A production
 deploy in `error` state fails at once and prints Netlify's `error_message`;
 a timeout prints every state it saw (`not-yet-present`, `building`,
@@ -545,7 +548,22 @@ commit status for production deploys.
 
 The wait logic is `netlify/wait-for-preview.sh` and
 `netlify/wait-for-production.sh`, checked out from this repo at
-`job.workflow_sha`, as `standards-check.yml` does with its scripts.
+`job.workflow_sha`, as `standards-check.yml` does with its scripts. The
+baseline check and the check-script selection (`netlify/baseline-check.sh`,
+`netlify/select-check-script.sh`) come from the same checkout.
+
+### Baseline check
+
+Every caller gets `netlify/baseline-check.sh <base-url>`, run before the
+caller's own script. It fails unless `GET /` returns HTTP 200 (redirects
+followed; 30-second timeout, 2 retries) with a body of at least 1024 bytes
+that contains a `<title>` element. It catches an empty, truncated, or
+non-HTML deploy. It knows nothing about the site, so a site that can say
+more about itself should still ship a check script.
+
+A site with no check script of its own (a static site that never changes,
+such as smartwatermelon/crazy-larry) gets the baseline check alone. It needs
+no `check-script` input: see the default-path rule in [Setup](#setup).
 
 ### How the waits work
 
@@ -614,16 +632,23 @@ jobs:
 - Pass the secret by name, not with `secrets: inherit`, so the workflow gets
   only this one secret. It is handed to the wait step only on `push`.
 - The check script is the site repo's own. It runs from the repo root as
-  `<script> <base-url>`, must be executable, and must exit nonzero on
-  failure. The workflow verifies that it exists and is executable before it
-  starts to wait.
+  `<script> <base-url>`, after the baseline check, must be executable, and
+  must exit nonzero on failure. The workflow verifies it before it starts to
+  wait:
+  - `check-script` left at its default (`scripts/check-deploy-preview.sh`)
+    and the file absent: skipped with a `::notice::`; only the baseline
+    check runs. Passing that default path explicitly behaves the same, since
+    the workflow cannot tell the two apart.
+  - `check-script` set to any other path and the file absent: fails at once
+    (exit 2), to catch a typo.
+  - The file present but not executable: fails at once (exit 2).
 
 ### Inputs
 
 | Input | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `netlify-site` | string | (required) | Netlify site name: the `<name>` in `<name>.netlify.app` |
-| `check-script` | string | `scripts/check-deploy-preview.sh` | Path in the caller repo, invoked as `<script> <base-url>` |
+| `check-script` | string | `scripts/check-deploy-preview.sh` | Path in the caller repo, invoked as `<script> <base-url>` after the baseline check. Skipped if absent at the default path; fails if absent at any other path. |
 | `timeout-minutes` | number | `20` | Job timeout. The wait alone runs to 10 minutes. |
 
 | Secret | Required | Description |
@@ -635,7 +660,9 @@ jobs:
 `tests/test-wait-for-preview.sh` and `tests/test-wait-for-production.sh` run
 the wait scripts against stub `gh` and `curl` in `tests/stub-netlify/`.
 `NETLIFY_POLL_INTERVAL` and `NETLIFY_POLL_DEADLINE` (seconds) shorten the
-poll for tests.
+poll for tests. `tests/test-baseline-check.sh` runs the baseline check
+against a stub `curl` in `tests/stub-baseline/`, and covers the check-script
+selection, including that its default matches the workflow input's.
 
 ### Versioning
 

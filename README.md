@@ -241,9 +241,9 @@ which reusable workflow the caller invokes. Use the standard names:
 
 | Caller filename | Calls |
 | --- | --- |
-| `claude-blocking-review.yml` | `claude-blocking-review.yml` |
 | `claude.yml` | `claude-assistant.yml` (note: the names differ) |
 | `dependabot-auto-merge.yml` | `dependabot-auto-merge.yml` |
+| `standards-check.yml` | `standards-check.yml` |
 
 Name a caller anything else and zizmor reports `excessive-permissions` against
 it with no indication why. Either rename it to the standard filename or add

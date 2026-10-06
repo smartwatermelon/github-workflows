@@ -11,6 +11,8 @@ jobs:
     uses: smartwatermelon/github-workflows/.github/workflows/netlify-site-checks.yml@netlify-site-checks-v1
     with:
       netlify-site: SITE-NAME
+      # Runs after the built-in baseline check. At this default path, a
+      # missing script is skipped; any other missing path fails.
       # check-script: scripts/check-deploy-preview.sh
     secrets:
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}

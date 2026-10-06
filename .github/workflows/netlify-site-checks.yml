@@ -14,8 +14,12 @@ on:
         type: string
         required: true
       check-script:
-        description: Path in the CALLER repo to the check script, invoked as `<script> <base-url>`
+        description: >-
+          Path in the CALLER repo to the check script, invoked as
+          `<script> <base-url>` after the built-in baseline check. Left at the
+          default and absent, it is skipped; any other absent path fails.
         type: string
+        # Must match default_script in netlify/select-check-script.sh.
         default: scripts/check-deploy-preview.sh
       timeout-minutes:
         description: >-
@@ -60,7 +64,7 @@ jobs:
           echo "sha=${JOB_WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
           echo "workflow SHA: ${JOB_WORKFLOW_SHA}"
 
-      - name: Checkout wait scripts at the called-workflow SHA
+      - name: Checkout netlify scripts at the called-workflow SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: smartwatermelon/github-workflows
@@ -72,19 +76,15 @@ jobs:
             netlify
 
       # Fail now, not after a 10-minute wait for a check that cannot run.
+      # A missing script at the default path is skipped, not failed.
       - name: Verify the check script
+        id: check_script
         env:
           CHECK_SCRIPT: ${{ inputs.check-script }}
+          SITE_DIR: site
         run: |
           set -euo pipefail
-          if [ ! -f "site/${CHECK_SCRIPT}" ]; then
-            echo "::error::check-script '${CHECK_SCRIPT}' does not exist in the caller repo"
-            exit 2
-          fi
-          if [ ! -x "site/${CHECK_SCRIPT}" ]; then
-            echo "::error::check-script '${CHECK_SCRIPT}' is not executable (git update-index --chmod=+x)"
-            exit 2
-          fi
+          bash netlify-src/netlify/select-check-script.sh >> "${GITHUB_OUTPUT}"
 
       # The token reaches this step only on push; a pull_request run never
       # holds it.
@@ -116,7 +116,17 @@ jobs:
           esac
           echo "url=${url}" >> "${GITHUB_OUTPUT}"
 
+      # Every site gets this, with or without a check script of its own.
+      - name: Baseline check
+        env:
+          SITE_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          echo "Running the baseline check against ${SITE_URL}"
+          bash netlify-src/netlify/baseline-check.sh "${SITE_URL}"
+
       - name: Check the served site
+        if: steps.check_script.outputs.run == 'true'
         working-directory: site
         env:
           CHECK_SCRIPT: ${{ inputs.check-script }}

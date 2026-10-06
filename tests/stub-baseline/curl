@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Stub curl for test-baseline-check.sh. Fixtures in STUB_DIR: status,
+# body; a file "down" means connection refused. argv -> calls.log.
+set -euo pipefail
+: "${STUB_DIR:?}"
+printf '%s\n' "$*" >>"${STUB_DIR}/calls.log"
+out="" fmt=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output | -o) out="$2"; shift 2 ;;
+    --write-out | -w) fmt="$2"; shift 2 ;;
+    --max-time | --connect-timeout | --retry | --retry-delay) shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -f "${STUB_DIR}/down" ]]; then
+  [[ "${fmt}" == '%{http_code}' ]] && printf '000'
+  echo "curl: (7) Failed to connect to 127.0.0.1 port 9: Connection refused" >&2
+  exit 7
+fi
+cat "${STUB_DIR}/body" >"${out:-/dev/stdout}"
+[[ "${fmt}" == '%{http_code}' ]] && cat "${STUB_DIR}/status"
+exit 0

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Stub gh for test-wait-for-preview.sh. status.<n>.json answers the nth
+# call (last one repeats); argv goes to calls.log.
+
+# --jq runs through real jq -r, like gh. Plural /statuses is refused.
+set -euo pipefail
+: "${STUB_DIR:?}"
+printf '%s\n' "$*" >>"${STUB_DIR}/calls.log"
+[[ "$1" == "api" ]] || { echo "stub gh: unhandled $*" >&2; exit 99; }
+shift
+path="" filter=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --jq) filter="$2"; shift 2 ;;
+    -*) shift ;;
+    *) path="$1"; shift ;;
+  esac
+done
+case "${path}" in
+  repos/*/commits/*/statuses)
+    echo "stub gh: plural /statuses is not what wait-for-preview.sh may call" >&2
+    exit 99 ;;
+  repos/*/commits/*/status) ;;
+  *) echo "stub gh: unhandled path ${path}" >&2; exit 99 ;;
+esac
+n=$(($(cat "${STUB_DIR}/status.count" 2>/dev/null || echo 0) + 1))
+echo "${n}" >"${STUB_DIR}/status.count"
+f="${STUB_DIR}/status.${n}.json"
+while [[ ! -f "${f}" && "${n}" -gt 1 ]]; do n=$((n - 1)); f="${STUB_DIR}/status.${n}.json"; done
+[[ -f "${f}" ]] || { echo "stub gh: no fixture ${f}" >&2; exit 98; }
+if [[ -n "${filter}" ]]; then jq -r "${filter}" "${f}"; else cat "${f}"; fi

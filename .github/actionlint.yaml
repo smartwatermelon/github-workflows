@@ -32,3 +32,8 @@ paths:
       # Scoped to this one message in this one file: any other expression
       # error, in this or any other workflow, still fires.
       - 'property "workflow_sha" is not defined in object type'
+  .github/workflows/netlify-site-checks.yml:
+    ignore:
+      # Same gap as standards-check.yml above: it checks out netlify/ at
+      # job.workflow_sha. Remove with the entry above.
+      - 'property "workflow_sha" is not defined in object type'

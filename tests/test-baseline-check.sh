@@ -10,11 +10,12 @@ workflow="${here}/../.github/workflows/netlify-site-checks.yml"
 unset -f curl 2>/dev/null || true
 unset BASH_ENV
 pass=0; fail=0
-tmp_dirs=()
-trap 'rm -rf "${tmp_dirs[@]}"' EXIT
+# One parent dir: _tmp runs in a $(...) subshell, so it cannot register dirs.
+tmp_root="$(mktemp -d)"
+trap 'rm -rf "${tmp_root}"' EXIT
 _ok() { echo "  ok   $1"; pass=$((pass + 1)); }
 _bad() { echo "  FAIL $1"; fail=$((fail + 1)); }
-_tmp() { local d; d="$(mktemp -d)"; tmp_dirs+=("${d}"); printf '%s' "${d}"; }
+_tmp() { mktemp -d "${tmp_root}/t.XXXXXX"; }
 
 # A page over the 1024-byte floor, with a title.
 pad="$(printf '%*s' 1100 '' | tr ' ' 'x')"

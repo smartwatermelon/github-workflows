@@ -608,6 +608,8 @@ jobs:
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
 ```
 
+- With the caller job named `netlify-site-checks`, the status check is
+  `netlify-site-checks / site-check` (caller job / inner job).
 - `statuses: read` is for preview mode, which reads commit statuses.
 - Pass the secret by name, not with `secrets: inherit`, so the workflow gets
   only this one secret. It is handed to the wait step only on `push`.

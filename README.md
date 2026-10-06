@@ -521,6 +521,131 @@ existing `claude-blocking-review`/`claude-assistant` `v1` line.
 
 ---
 
+## `netlify-site-checks.yml`
+
+Reusable acceptance check for a Netlify site, run against the deploy Netlify
+actually published
+([dev-env#193](https://github.com/smartwatermelon/dev-env/issues/193)). It
+replaces the hand-copied `verify-deploy-preview.yml` files in the site repos,
+and adds a check of the production deploy after every merge, which nothing
+ran before.
+
+The triggering event picks the mode:
+
+| Event | Mode | Waits for | Then checks |
+| ----- | ---- | --------- | ----------- |
+| `pull_request` | preview | The commit status Netlify posts on the PR head, context `netlify/<netlify-site>/deploy-preview` | its `target_url` |
+| `push` | production | The Netlify API deploy with `context == "production"` and `commit_ref` equal to the pushed SHA, until `state` is `ready` | the site's `ssl_url` (primary custom domain), else `url` |
+
+Any other event fails. Both waits give up after 10 minutes. A production
+deploy in `error` state fails at once and prints Netlify's `error_message`;
+a timeout prints every state it saw (`not-yet-present`, `building`,
+`request-failed`, ...). Production mode exists because Netlify posts no
+commit status for production deploys.
+
+The wait logic is `netlify/wait-for-preview.sh` and
+`netlify/wait-for-production.sh`, checked out from this repo at
+`job.workflow_sha`, as `standards-check.yml` does with its scripts.
+
+### How the waits work
+
+**Preview** is a port of the poll in nightowlstudiollc/amelia-boone's
+`verify-deploy-preview.yml`. It reads the commit status rather than building
+the preview URL by hand: that tells "still building" from "deploy failed",
+and the checks run against the deploy Netlify published for this commit. A
+`success` with no `target_url` fails rather than checking nothing.
+
+It calls the **singular** `/commits/{sha}/status`, which keeps only the
+latest status per context. The `head -1` after each `jq` is defensive and
+does nothing on that endpoint. It is there because the plural
+`/commits/{sha}/statuses` is one character away and returns full history:
+every amelia-boone PR checked had two rows for the context. Fed that, the
+script would read `success\npending`, match no branch, and poll to the
+deadline on a deploy that succeeded (amelia-boone#50). Keep `head -1` if the
+endpoint changes. `tests/test-wait-for-preview.sh` covers the two-row case
+and refuses the plural endpoint.
+
+**Production** reads the Netlify API with `NETLIFY_AUTH_TOKEN`. The token is
+written to curl as a config on stdin (`curl -K -`) by `printf`, a bash
+builtin, so it is never in any process's argv and never in a file on disk.
+`-H "Authorization: Bearer $TOKEN"` would put it in argv. A failed request
+counts as `request-failed` and the wait continues, so a bad token or a wrong
+site name shows up in the timeout message.
+
+API facts it relies on, checked on 2026-10-06 against the OpenAPI spec at
+<https://open-api.netlify.com/swagger.json> (`site` and `deploy`
+definitions) and against live responses for `ameliabooneracing`:
+
+- `{site_id}` accepts `<name>.netlify.app` in place of the site UUID.
+- A deploy has `context` (`production`, `deploy-preview`, ...), `state`,
+  `commit_ref` (the full SHA), and `error_message`.
+- `GET /sites/{site_id}/deploys` lists newest first (descending
+  `created_at`). The script takes the first match, so a retried deploy wins
+  over an earlier `error` for the same SHA.
+- `site.ssl_url` is the primary custom domain over https
+  (`https://ameliabooneracing.com`). `site.url` is the fallback.
+
+### Setup
+
+`.github/workflows/netlify-site-checks.yml` in the site repo. The canonical
+copy is `netlify/caller-stub.yml`:
+
+```yaml
+name: Netlify Site Checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  statuses: read
+jobs:
+  netlify-site-checks:
+    uses: smartwatermelon/github-workflows/.github/workflows/netlify-site-checks.yml@netlify-site-checks-v1
+    with:
+      netlify-site: ameliabooneracing
+    secrets:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+```
+
+- `statuses: read` is for preview mode, which reads commit statuses.
+- Pass the secret by name, not with `secrets: inherit`, so the workflow gets
+  only this one secret. It is handed to the wait step only on `push`.
+- The check script is the site repo's own. It runs from the repo root as
+  `<script> <base-url>`, must be executable, and must exit nonzero on
+  failure. The workflow verifies that it exists and is executable before it
+  starts to wait.
+
+### Inputs
+
+| Input | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `netlify-site` | string | (required) | Netlify site name: the `<name>` in `<name>.netlify.app` |
+| `check-script` | string | `scripts/check-deploy-preview.sh` | Path in the caller repo, invoked as `<script> <base-url>` |
+| `timeout-minutes` | number | `20` | Job timeout. The wait alone runs to 10 minutes. |
+
+| Secret | Required | Description |
+| ------ | -------- | ----------- |
+| `NETLIFY_AUTH_TOKEN` | production only | Netlify personal access token. A `push` run without it fails with a message that says so. |
+
+### Tests
+
+`tests/test-wait-for-preview.sh` and `tests/test-wait-for-production.sh` run
+the wait scripts against stub `gh` and `curl` in `tests/stub-netlify/`.
+`NETLIFY_POLL_INTERVAL` and `NETLIFY_POLL_DEADLINE` (seconds) shorten the
+poll for tests.
+
+### Versioning
+
+| Tag | Meaning |
+| ----- | --------- |
+| `netlify-site-checks-v1` | Floating major for callers, moved manually and human-authorized, like `standards-check-v1`. |
+
+Prefixed for the same reason as `standards-check-v*`: tags in this repo are
+repo-scoped, not per-file.
+
+---
+
 ## `claude-assistant`
 
 Reusable workflow that invokes Claude Code Action. The caller handles triggers

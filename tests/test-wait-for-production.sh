@@ -8,6 +8,8 @@ script="${here}/../netlify/wait-for-production.sh"
 unset -f gh curl 2>/dev/null || true
 unset BASH_ENV
 pass=0; fail=0
+stub_dirs=()
+trap 'rm -rf "${stub_dirs[@]}"' EXIT
 _ok() { echo "  ok   $1"; pass=$((pass + 1)); }
 _bad() { echo "  FAIL $1"; fail=$((fail + 1)); }
 
@@ -17,6 +19,7 @@ token="nfp_TESTTOKEN_must_never_be_printed"
 
 _fixture() {
   STUB_DIR="$(mktemp -d)"; export STUB_DIR
+  stub_dirs+=("${STUB_DIR}")
   : >"${STUB_DIR}/calls.log"
   printf '%s' "${token}" >"${STUB_DIR}/token"
   printf '{"name":"examplesite","url":"http://example.com","ssl_url":"https://example.com"}' >"${STUB_DIR}/site.json"

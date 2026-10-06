@@ -7,6 +7,8 @@ script="${here}/../netlify/wait-for-preview.sh"
 unset -f gh curl 2>/dev/null || true
 unset BASH_ENV
 pass=0; fail=0
+stub_dirs=()
+trap 'rm -rf "${stub_dirs[@]}"' EXIT
 _ok() { echo "  ok   $1"; pass=$((pass + 1)); }
 _bad() { echo "  FAIL $1"; fail=$((fail + 1)); }
 
@@ -16,6 +18,7 @@ url="https://deploy-preview-7--examplesite.netlify.app"
 
 _fixture() { # fresh STUB_DIR; status fixtures are written by each case
   STUB_DIR="$(mktemp -d)"; export STUB_DIR
+  stub_dirs+=("${STUB_DIR}")
   : >"${STUB_DIR}/calls.log"
 }
 # _status N STATE [TARGET]: the nth poll sees one row for the context.

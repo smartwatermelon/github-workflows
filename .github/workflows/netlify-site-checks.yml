@@ -1,0 +1,127 @@
+name: Netlify Site Checks
+
+# Acceptance checks on the deploy Netlify published: preview on pull_request,
+# production on push (dev-env#193). README.md has the details.
+
+# Caller stub: netlify/caller-stub.yml. The caller grants contents: read and
+# statuses: read, and passes NETLIFY_AUTH_TOKEN by name.
+
+on:
+  workflow_call:
+    inputs:
+      netlify-site:
+        description: Netlify site name (the <name> in <name>.netlify.app), e.g. ameliabooneracing
+        type: string
+        required: true
+      check-script:
+        description: Path in the CALLER repo to the check script, invoked as `<script> <base-url>`
+        type: string
+        default: scripts/check-deploy-preview.sh
+      timeout-minutes:
+        description: >-
+          Job timeout. The wait alone runs to 10 minutes, so leave room for
+          the check script on top of that.
+        type: number
+        default: 20
+    secrets:
+      NETLIFY_AUTH_TOKEN:
+        description: Netlify personal access token. Required for push (production) runs only.
+        required: false
+
+permissions: {}
+
+jobs:
+  site-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: read
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          path: site
+
+      # An empty ref makes checkout take the default branch, so fail instead.
+      # Same step as standards-check.yml.
+      - name: Resolve the workflow SHA
+        id: workflow_sha
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOB_WORKFLOW_SHA}" ]; then
+            echo "::error::job.workflow_sha is empty; refusing to check out an ambiguous ref"
+            exit 2
+          fi
+          echo "sha=${JOB_WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "workflow SHA: ${JOB_WORKFLOW_SHA}"
+
+      - name: Checkout wait scripts at the called-workflow SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: smartwatermelon/github-workflows
+          ref: ${{ steps.workflow_sha.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: netlify-src
+          sparse-checkout: |
+            netlify
+
+      # Fail now, not after a 10-minute wait for a check that cannot run.
+      - name: Verify the check script
+        env:
+          CHECK_SCRIPT: ${{ inputs.check-script }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "site/${CHECK_SCRIPT}" ]; then
+            echo "::error::check-script '${CHECK_SCRIPT}' does not exist in the caller repo"
+            exit 2
+          fi
+          if [ ! -x "site/${CHECK_SCRIPT}" ]; then
+            echo "::error::check-script '${CHECK_SCRIPT}' is not executable (git update-index --chmod=+x)"
+            exit 2
+          fi
+
+      # The token reaches this step only on push; a pull_request run never
+      # holds it.
+      - name: Wait for the Netlify deploy
+        id: deploy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          NETLIFY_SITE: ${{ inputs.netlify-site }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          NETLIFY_AUTH_TOKEN: ${{ github.event_name == 'push' && secrets.NETLIFY_AUTH_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            pull_request)
+              echo "Preview mode: PR head ${PR_HEAD_SHA}"
+              url="$(COMMIT_SHA="${PR_HEAD_SHA}" bash netlify-src/netlify/wait-for-preview.sh)"
+              ;;
+            push)
+              echo "Production mode: pushed ${PUSH_SHA}"
+              url="$(COMMIT_SHA="${PUSH_SHA}" bash netlify-src/netlify/wait-for-production.sh)"
+              ;;
+            *)
+              echo "::error::netlify-site-checks runs on pull_request (preview) or push" \
+                "(production), not '${EVENT_NAME}'"
+              exit 2
+              ;;
+          esac
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check the served site
+        working-directory: site
+        env:
+          CHECK_SCRIPT: ${{ inputs.check-script }}
+          SITE_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          echo "Running ${CHECK_SCRIPT} against ${SITE_URL}"
+          "./${CHECK_SCRIPT}" "${SITE_URL}"

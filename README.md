@@ -2,170 +2,13 @@
 
 Reusable GitHub Actions workflows.
 
-## `claude-blocking-review` (DEPRECATED)
+## Bare-tag versioning (`v1`, `v2`, `v3`)
 
-> **Deprecated (#154).** Do not add this to new repos. Use
-> `standards-check.yml` instead. The file stays only because
-> `smartwatermelon/crazy-larry` and `nightowlstudiollc/networth-agent` still
-> require its check, as may the kebab-tax repos. Do not delete it while any
-> caller exists. The bulk-install and audit scripts are retired.
-
-Runs a Claude Code Review on every PR and **blocks merges** when Claude finds
-bugs, reliability regressions, security vulnerabilities, or data-loss risks.
-
-### What triggers a BLOCK
-
-| Category | Examples |
-| ---------- | --------- |
-| Clear bug | Wrong calculation, inverted condition, off-by-one affecting real data |
-| Reliability regression | Previously working path may now fail due to this PR |
-| Security | Hardcoded credentials, auth bypass, unvalidated input to privileged op |
-| Async error handling | Missing `await` causing silent failure or raw exception to surface |
-| Data loss | Risk of corrupting or deleting user data |
-
-Style issues, coverage gaps, performance concerns, and docs are always **PASS**.
-When uncertain, Claude defaults to **PASS**.
-
-Regression BLOCKs require a **line-level code path trace** — Claude must identify
-the specific file, line, and execution path that causes the failure. Assertions about
-test failures without traceable evidence default to PASS.
-
-### Auto-sizing
-
-Review parameters are estimated automatically from the PR diff size. The
-reviewer prompt is BLOCK-only (bug / reliability regression / security /
-async-error / data-loss), not a full code review — local reviewers are
-expected to cover style, test coverage, and documentation concerns. v3
-removed the `--max-turns` cap; reviews are now bounded only by the
-wall-clock timeout, the prompt's scope discipline, and the OAuth
-subscription quota.
-
-| Parameter   | Logic                         | Range               |
-| ----------- | ----------------------------- | ------------------- |
-| **Model**   | Sonnet (callers can override) | `claude-sonnet-5-5` |
-| **Timeout** | `10 + lines/100` minutes      | 10–30 minutes       |
-
-Callers can override any parameter:
-
-```yaml
-with:
-  pr_number: ${{ github.event.pull_request.number }}
-  model: claude-sonnet-5-5     # force sonnet for all diffs
-  timeout_minutes: 15          # override timeout estimate
-```
-
-Pass `0` for `timeout_minutes` to use auto-estimation (the default).
-Pass `auto` for `model` to use auto-selection (the default).
-
-**v3 (2026-04-28):** the `max_turns` input was removed and the
-`--max-turns` flag is no longer passed to the Claude agent. Reviews are
-now bounded only by the wall-clock `timeout_minutes` (the hard safety
-net), the prompt's own scope discipline, and the OAuth subscription
-quota. The previous "Review did not complete (likely exceeded turn
-limit)" failure mode is gone. **Caller migration:** remove `max_turns:`
-from your caller workflow when bumping to `@v3`; it will fail
-workflow validation if left in place.
-
-If the review times out before rendering a verdict, the check **fails**
-(INCOMPLETE) instead of silently passing. Use the escape hatch below to
-bypass if needed.
-
-### Escape hatch
-
-Add `[skip-claude-review: reason]` to the PR body to bypass enforcement.
-The override is logged in the step summary for audit.
-
-This unscoped form is honored unconditionally on **every** subsequent run
-for the life of the PR — it's a deliberate, visible opt-out, not scoped to
-any particular commit. That's intentional grandfathered behavior for
-markers already in use; see below for a way to bound the bypass to a
-single commit.
-
-**Scoping a skip to one commit (v3.1.0+):** add
-`[skip-claude-review sha=<short-sha>: reason]` instead, where `<short-sha>`
-is a prefix (7+ characters) of the commit SHA you want to bypass review
-for — use the PR's head commit SHA, e.g. from `gh pr view <PR> --json
-headRefOid -q .headRefOid`. The marker is only honored while it matches
-the **current** head SHA of the PR. If the PR is pushed to again, the head
-SHA changes and the marker stops applying automatically — a visible
-`::notice::` in the step summary calls this out so it isn't only
-discoverable by diffing raw run logs. Markers with a `sha=` value shorter
-than 7 characters are rejected as invalid (prevents a trivial bypass like
-`sha=a` matching anything) and the review proceeds normally.
-
-**Important: to make a `sha=`-scoped marker take effect, use `gh run rerun
-<run-id>` on the existing failed/blocked run — do not push a new commit.**
-Editing the PR body does not retrigger this workflow (there's no `edited`
-event in the trigger list), so the only way to get a fresh check run
-against the same commit is `gh run rerun`. A new commit/push changes the
-head SHA and immediately invalidates a marker scoped to the old SHA — that
-is the intended anti-staleness behavior, not a bug to work around.
-
-### Setup
-
-#### 1. Add the secret
-
-Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
-
-#### 2. Create the caller workflow
-
-`.github/workflows/claude-blocking-review.yml` in your repo:
-
-```yaml
-name: Claude Blocking Review
-
-on:
-  pull_request:
-    types: [opened, synchronize]
-    paths-ignore:         # optional: skip docs-only PRs
-      - '**.md'
-      - 'docs/**'
-
-jobs:
-  # Do NOT add a caller-level `if: github.actor != 'dependabot[bot]'` gate.
-  # A job-level `if:` that evaluates false means this job never dispatches,
-  # so a required status check on it never reports — it stays permanently
-  # pending on Dependabot PRs under branch protection that requires the
-  # check, blocking auto-merge entirely. The reusable workflow instead
-  # skips Dependabot PRs from INSIDE the job (see its own "Check for
-  # Dependabot PR" step), so the job still runs and reports a real PASS.
-  # `@v3` already resolves to a commit that contains that in-job skip, so
-  # tracking the floating tag is all you need — there is no version floor
-  # to enforce yourself. See smartwatermelon/github-workflows#115/#117 for
-  # the incident that established this; a caller-level gate was tried and
-  # reverted.
-  claude-review:
-    # Replace YOUR_ORG with smartwatermelon, or your fork's org, before use.
-    # Track floating @v3, not an exact @v3.x.y — see "Versioning" below.
-    uses: YOUR_ORG/github-workflows/.github/workflows/claude-blocking-review.yml@v3
-    with:
-      pr_number: ${{ github.event.pull_request.number }}
-      # extra_instructions: |
-      #   Repo-specific guidance for Claude here.
-    secrets:
-      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-```
-
-#### 3. Add the required status check
-
-In **Settings → Branches → Branch protection rules → [your branch]**,
-add this required status check:
-
-```
-claude-review / run-review
-```
-
-With reusable workflows, GitHub reports the **inner job** as the status check.
-The check name is `{caller job name} / {inner job name}`. If you name your
-caller job `claude-review`, the check name will always be
-`claude-review / run-review` regardless of which repo you're in.
-
-### Threshold calibration
-
-The BLOCK criteria are in the workflow prompt. To adjust:
-
-- Fork this repo and point your callers at your fork
-- Or open a PR with updated criteria
+> `claude-blocking-review.yml` was retired and deleted on 2026-10-06 (follows
+> [dev-env#194](https://github.com/smartwatermelon/dev-env/issues/194)). The
+> required check is now `standards-check / run-standards-check`. Old tags keep
+> the file at their commits; the bare `v3` tag is now used by
+> `claude-assistant.yml`.
 
 ### Versioning
 
@@ -195,7 +38,7 @@ how it happened.
 Floating `@v3` inverts this: one tag repoint here reaches every caller.
 
 The trade-off is real — a bad release also reaches everyone at once. What
-bounds it: this repo is branch-protected with a required blocking review, the
+bounds it: this repo is branch-protected with a required standards check, the
 reusable workflows SHA-pin every third-party action they use, `dependabot.yml`
 surfaces those bumps as reviewable PRs, and floating-tag moves are manual and
 human-authorized. There is no automation that repoints a floating tag.
@@ -210,7 +53,7 @@ commit SHA annotated `# v3`, and an exact `@v3.1.0` serving months-old content.
 Resolve the ref to the action version it actually delivers:
 
 ```console
-$ gh api "repos/smartwatermelon/github-workflows/contents/.github/workflows/claude-blocking-review.yml?ref=<REF>" \
+$ gh api "repos/smartwatermelon/github-workflows/contents/.github/workflows/claude-assistant.yml?ref=<REF>" \
     --jq '.content' | base64 -d | grep -oE 'claude-code-action@[a-f0-9]{8}'
 ```
 
@@ -258,12 +101,12 @@ normally.
 #### The `v1` line is deprecated
 
 **Tags in this repo are repo-wide, not per-file.** A git tag labels a commit,
-so every tag contains *all three* reusable workflows — `@v3.1.2` and `@v1.2.6`
+so every tag contains *every* reusable workflow present at that commit — `@v3.1.2` and `@v1.2.6`
 are byte-identical if they point at the same commit. The version "lines" are
 independent release tracks, not versions of separate products.
 
 `v1` was originally the track for `claude-assistant.yml`, with `v2`/`v3`
-tracking `claude-blocking-review.yml`. That split no longer reflects reality:
+tracked the since-retired `claude-blocking-review.yml`. That split no longer reflects reality:
 **every caller in the fleet references the assistant via the `v3` line**, and
 as of 2026-08-17 no repo references `v1` at all.
 
@@ -272,8 +115,8 @@ mistake of cutting one and not the other. So:
 
 - **`v1` is frozen** at `v1.2.6` and will not be updated further.
 - **Point every caller at the `v3` line**, including `claude-assistant.yml`
-  callers. The floating `@v3` tag is the recommended ref for both the
-  blocking-review and assistant callers — see "Prefer floating `@v3` over an
+  callers. The floating `@v3` tag is the recommended ref for assistant
+  callers — see "Prefer floating `@v3` over an
   exact pin" above; that guidance is not scoped to one workflow.
 - If you are still on `@v1` or `@v1.2.x`, move to `@v3`. There is no
   interface change — the files are identical at equivalent commits.
@@ -371,7 +214,7 @@ to this file.** The guardrail below enforces this (closes #64):
 
 Tagged with a prefixed namespace — `dependabot-auto-merge-v1`,
 `dependabot-auto-merge-v1.0.0`, etc. — rather than the bare `v1`/`v2`/`v3`
-tags used by `claude-blocking-review` and `claude-assistant`. Git tags
+tags used by `claude-assistant` (and formerly `claude-blocking-review`). Git tags
 are repo-scoped, not per-file; a bare `v1` on this repo already exists.
 A second, unrelated file can't safely "start its own v1" in the same tag
 namespace. (The bare `v1` line is now frozen and deprecated — see
@@ -385,8 +228,7 @@ from 2-3 low-traffic pilot repos first, pinned to the specific new tag
 (not a floating major). Let at least one real Dependabot PR flow
 through each pilot and confirm correct patch/minor-only behavior before
 repointing any floating tag fleet-wide. This workflow approves and
-merges PRs unattended with no fallback reviewer behind it (unlike
-`claude-blocking-review`, which explicitly skips Dependabot PRs) — a
+merges PRs unattended with no fallback reviewer behind it — a
 bug here ships to every repo pinned to the affected tag at once, so it
 gets the same pilot-then-fleet discipline as the org-level rollout
 work.
@@ -398,7 +240,7 @@ work.
 Reusable, deterministic, secret-free standards check. Per
 [dev-env#60](https://github.com/smartwatermelon/dev-env/issues/60) and
 [github-workflows#154](https://github.com/smartwatermelon/github-workflows/issues/154),
-decided 2026-09-08, this check replaces `claude-blocking-review.yml` as the
+decided 2026-09-08, this check replaced the retired `claude-blocking-review.yml` as the
 fleet's required check, with no judgment reviewer kept in CI. Rollout (W2)
 and retirement of the old required check (W3) follow as separate phases; see
 [`smartwatermelon/dev-env` `docs/superpowers/plans/2026-09-08-w1-standards-check.md`](https://github.com/smartwatermelon/dev-env/blob/main/docs/superpowers/plans/2026-09-08-w1-standards-check.md)
@@ -517,7 +359,7 @@ without merging.
 This workflow uses its own prefixed tag namespace for the same reason
 `dependabot-auto-merge` does: git tags in this repo are repo-scoped, not
 per-file, so a fourth workflow starting a bare `v1` would collide with the
-existing `claude-blocking-review`/`claude-assistant` `v1` line.
+existing `claude-assistant` `v1` line.
 
 ---
 

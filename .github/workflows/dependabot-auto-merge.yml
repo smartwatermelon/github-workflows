@@ -125,7 +125,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Mirrors claude-blocking-review.yml's preflight — fail loudly and
+          # Preflight: fail loudly and
           # specifically if the caller didn't grant contents:write /
           # pull-requests:write, rather than letting `gh pr merge` fail
           # later with an unattributable error (the #87 failure mode).

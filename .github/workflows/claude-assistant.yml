@@ -120,8 +120,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
-          # See the matching note in claude-blocking-review.yml: nothing here
-          # consumes the persisted credential. claude-code-action takes its
+          # Nothing here consumes the persisted credential. claude-code-action takes its
           # own github_token input and runs no git push/commit, so dropping
           # it removes exposure without removing capability (zizmor:
           # artipacked).
@@ -143,7 +142,7 @@ jobs:
           # outright rather than sanitized.
 
           # Validate model: empty (action default) or alphanumeric/dots/
-          # hyphens. Same pattern and error style as claude-blocking-review.yml.
+          # hyphens. Failures print a specific error naming the bad input.
           # NOTE on grep: `grep -qE '^…$'` matches PER LINE, so a multi-line
           # value could smuggle a bad line past an otherwise-anchored pattern.
           # All inputs are therefore newline-checked before the charset check,
@@ -181,9 +180,7 @@ jobs:
           # src/modes/agent/parse-tools.ts tokenizes claude_args with
           # shell-quote (parseShellArgs), so the double quotes are honored as
           # real shell quoting and a spec like Bash(gh pr view:*) survives
-          # intact. claude-blocking-review.yml quotes its literal allowlist
-          # for the same reason, and the action itself emits
-          # --allowedTools "..." the same way.
+          # intact. The action itself emits --allowedTools "..." the same way.
           if [ -n "$ALLOWED_TOOLS" ]; then
             # Newlines first: a multi-line value would both break the
             # generated command line and corrupt the $GITHUB_OUTPUT write
@@ -253,9 +250,8 @@ jobs:
           # CI cycle on exactly this before someone dug through logs to
           # find the missing secret).
           #
-          # Deliberately unconditional (no `if:` gate) — unlike
-          # claude-blocking-review.yml, this workflow has no doc-only/
-          # Dependabot skip paths to gate behind. `required: false` on the
+          # Deliberately unconditional (no `if:` gate): this workflow has no
+          # doc-only/Dependabot skip paths to gate behind. `required: false` on the
           # secrets: block above is NOT a signal that the token is
           # optional for this job to function: it exists solely to avoid
           # a GitHub dispatch-time validation quirk where `required: true`

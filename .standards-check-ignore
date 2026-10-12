@@ -1,3 +1,12 @@
-# Repos that never get standards-check.yml installed by
-# bulk-install-standards-check.sh. One owner/repo per line; # is a comment.
-nightowlstudiollc/networth-agent
+# Repos exempt from the standards-check policy (caller + required check).
+# Read by bulk-install-standards-check.sh.
+#
+# Format: one entry per line, "owner/repo  # reason". The reason is required;
+# an entry without one is reported as ERROR. Lines starting with # are
+# comments.
+#
+# Archived repos and forks are skipped by the classifier on their own
+# (ARCHIVED, FORK). A fork is listed here too only to keep the written reason
+# next to the policy.
+nightowlstudiollc/networth-agent  # archived; nothing runs on it
+twistedmelonman/Instapaper-MCP  # fork of an upstream project; its CI belongs to upstream, and local commits would diverge the fork

@@ -9,4 +9,5 @@
 # (ARCHIVED, FORK). A fork is listed here too only to keep the written reason
 # next to the policy.
 nightowlstudiollc/networth-agent  # archived; nothing runs on it
+smartwatermelon/claude-config-backup  # private and unprotected by design: an automated backup that takes no pull requests, so a required check guards nothing
 twistedmelonman/Instapaper-MCP  # fork of an upstream project; its CI belongs to upstream, and local commits would diverge the fork

@@ -206,6 +206,10 @@ rc=0
 out="$(GH_TOKEN_NOS="" OWNERS=nightowlstudiollc run 2>&1)" || rc=$?
 if [[ "${rc}" == "2" ]] && grep -q 'GH_TOKEN_NOS is not set' <<<"${out}"; then _ok "missing owner token is fatal"; else _bad "missing token: rc=${rc} ${out}"; fi
 if [[ -s "${STUB_DIR}/calls.log" ]]; then _bad "API called without a token"; else _ok "no API call without a token"; fi
+_fixture
+rc=0
+out="$(GH_TOKEN_TWM="" run --extra-repos twistedmelonman/x 2>&1)" || rc=$?
+if [[ "${rc}" == "2" ]] && grep -q 'GH_TOKEN_TWM is not set' <<<"${out}"; then _ok "extra repo's owner token checked"; else _bad "extra owner token: rc=${rc} ${out}"; fi
 
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

@@ -16,7 +16,7 @@
 # Failure output copies real `gh api`: the JSON body on stdout, a
 # "gh: <reason> (HTTP <code>)" line on stderr, exit 1. Measured 2026-09-08
 # against `gh api repos/smartwatermelon/does-not-exist-xyz-9876`.
-# Archived state comes from the isArchived field in repos/<owner>.json.
+# Archived and fork state come from the archived/fork fields of the listing.
 set -euo pipefail
 : "${STUB_DIR:?}"
 # One line per invocation: arguments carry multi-line bodies (commit message,

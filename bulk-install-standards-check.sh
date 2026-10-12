@@ -111,10 +111,15 @@ ghx() {
 
 # An unset token would fall back to another identity and read a partial fleet.
 check_tokens() {
-  local owner var
-  local -a owners
+  local owner r var
+  local -a owners extras
   IFS=',' read -r -a owners <<<"${OWNERS}"
+  IFS=',' read -r -a extras <<<"${EXTRA}"
+  for r in "${extras[@]}"; do
+    [[ -n "${r}" ]] && owners+=("${r%%/*}")
+  done
   for owner in "${owners[@]}"; do
+    [[ -n "${owner}" ]] || continue
     var="$(token_var "${owner}")"
     if [[ -n "${var}" && -z "${!var:-}" ]]; then
       echo "FATAL: ${var} is not set; cannot read ${owner}'s repos with its own token" >&2

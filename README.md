@@ -131,8 +131,38 @@ cannot safely start its own bare `v1` while one already exists.
 ## `dependabot-auto-merge`
 
 Reusable workflow: approves and auto-merges Dependabot PRs for patch and
-minor version updates once CI passes. Major-version bumps are left open
-for manual review.
+minor version updates once the **required** checks pass. Major-version
+bumps are left open for manual review, unless the dependency is in a
+trusted namespace or the caller opts in with `allow_major: true`.
+
+"Required" means branch protection's list, not every check. `gh pr merge
+--auto` waits only on required checks, and most fleet repos require only
+`standards-check`. On the patch/minor path, a red `build` that is not
+required does not stop the merge.
+
+### Opt-in: `allow_major`
+
+`allow_major: true` (default `false`) lets a **single-dependency** major
+bump merge without a human, under a stricter gate than the patch/minor
+path (smartwatermelon/dev-env#120):
+
+- The job waits until **every** check on the PR head SHA has finished,
+  required or not, except this workflow's own. Any failed or cancelled
+  check leaves the PR for manual review. SKIPPED and NEUTRAL do not block.
+- It then merges directly with `--match-head-commit`, not `--auto`, so a
+  later Dependabot rebase cannot inherit an armed auto-merge.
+- It gives up with a `::notice::` (never a red check) after about 40
+  minutes, when the head moves, or when it cannot see its own check run.
+  The job's token has no `checks` permission; on a private repo the check
+  list may come back blank, and the self-visibility test turns that into
+  "manual review" instead of a false "all green".
+- Grouped PRs never take this path.
+- Pair it with a Dependabot `cooldown` so a major is some days old before
+  its PR opens. `semver-major-days` works only for ecosystems that support
+  SemVer (npm, pip, uv, and others); `github-actions` honors only
+  `default-days`. **Security updates ignore `cooldown`**, so with
+  `allow_major: true` a security-driven major can merge on day 0 once all
+  checks are green.
 
 ### Setup
 
@@ -170,6 +200,7 @@ jobs:
     uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v2
     with:
       trusted_namespaces: 'smartwatermelon' # adjust to your own org; dependabot/actions are always trusted
+      # allow_major: true  # optional; see "Opt-in: allow_major" above
 ```
 
 Also add `can_approve_pull_request_reviews: true` to the repo's Actions

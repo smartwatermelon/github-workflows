@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Stub gh: pr view prints head; pr checks prints checks.<n>.json
+# (last repeats) and exits 8 while pending, like gh.
+set -euo pipefail
+: "${STUB_DIR:?}"
+printf '%s\n' "$*" >>"${STUB_DIR}/calls.log"
+case "$1 $2" in
+  "pr view")
+    cat "${STUB_DIR}/head"
+    ;;
+  "pr checks")
+    n=$(($(cat "${STUB_DIR}/checks.count" 2>/dev/null || echo 0) + 1))
+    echo "${n}" >"${STUB_DIR}/checks.count"
+    f="${STUB_DIR}/checks.${n}.json"
+    while [[ ! -f "${f}" && "${n}" -gt 1 ]]; do n=$((n - 1)); f="${STUB_DIR}/checks.${n}.json"; done
+    [[ -f "${f}" ]] || { echo "stub gh: no fixture ${f}" >&2; exit 98; }
+    cat "${f}"
+    if jq -e 'any(.[]; .bucket == "pending")' "${f}" >/dev/null 2>&1; then exit 8; fi
+    ;;
+  *)
+    echo "stub gh: unhandled $*" >&2
+    exit 99
+    ;;
+esac

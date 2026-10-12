@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Testing and linting
 
 - `bash tests/run-tests.sh` runs the standards suites (`test-run-standards.sh`, `test-check-node-floor.sh`).
-  Requires `shellcheck`, `yamllint`, `actionlint`, `zizmor`, and `markdownlint-cli2` (all via Homebrew), plus `jq`.
+  Requires `shellcheck`, `yamllint`, `actionlint`, `zizmor`, and `markdownlint-cli2` (all via Homebrew), plus `jq`,
+  and `yq` for `test-dependabot-auto-merge.sh`, which extracts that workflow's inline `run:` blocks.
 - `bash standards/run-standards.sh --repo <dir>` runs the exact same standards
   check CI runs, against a local checkout — this is the command
   `standards-check.yml` calls in CI, so a clean local run predicts a clean

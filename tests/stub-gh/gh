@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Stub gh for bulk-install-standards-check.sh tests. Fixture layout:
-#   ${STUB_DIR}/repos/<owner>.json      -> output of `gh repo list <owner> --json ...`
+#   ${STUB_DIR}/repos/<owner>.json      -> REST listing of orgs/<owner>/repos
+#   ${STUB_DIR}/types/<owner>           -> account type ("User"); default Organization
+#   ${STUB_DIR}/user-repos.json         -> REST listing of user/repos (user owners)
+#   ${STUB_DIR}/protection/<o>__<r>     -> branch protection JSON (200)
+#                                          absent: 404 "Branch not protected"
+#   ${STUB_DIR}/protection-free/<o>__<r> -> 403 "Upgrade to GitHub Pro" (Free plan)
+#   ${STUB_DIR}/protection-fail/<o>__<r> -> bare 403 (e.g. wrong owner's token)
 #   ${STUB_DIR}/files/<owner>__<repo>   -> existing stub content, if the repo has one
 #   ${STUB_DIR}/fail/<owner>__<repo>    -> contents GET fails 403 instead of 404
 #   ${STUB_DIR}/branch-exists/<o>__<r>  -> the chore/standards-check-stub ref exists
@@ -17,11 +23,6 @@ set -euo pipefail
 # PR body), so escape newlines rather than break the log's one-line contract.
 printf '%s\n' "${*//$'\n'/\\n}" >>"${STUB_DIR}/calls.log"
 case "$1" in
-  repo)
-    # gh repo list <owner> --json name,isArchived,defaultBranchRef --limit 200
-    owner="$3"
-    cat "${STUB_DIR}/repos/${owner}.json"
-    ;;
   api)
     shift
     method="GET"
@@ -55,6 +56,35 @@ case "$1" in
       fi
     }
     case "${method} ${path}" in
+      "GET users/"*)
+        owner="${path#users/}"
+        t="Organization"
+        [[ -f "${STUB_DIR}/types/${owner}" ]] && t="$(cat "${STUB_DIR}/types/${owner}")"
+        printf '{"type":"%s"}\n' "${t}" | emit ;;
+      "GET orgs/"*"/repos")
+        owner="${path#orgs/}"; owner="${owner%%/*}"
+        emit <"${STUB_DIR}/repos/${owner}.json" ;;
+      "GET user/repos")
+        emit <"${STUB_DIR}/user-repos.json" ;;
+      "GET repos/"*"/branches/"*"/protection")
+        rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"
+        if [[ -f "${STUB_DIR}/protection-free/${owner}__${repo}" ]]; then
+          printf '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}'
+          echo 'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)' >&2
+          exit 1
+        fi
+        if [[ -f "${STUB_DIR}/protection-fail/${owner}__${repo}" ]]; then
+          printf '{"message":"Resource not accessible by personal access token","status":"403"}'
+          echo 'gh: Resource not accessible by personal access token (HTTP 403)' >&2
+          exit 1
+        fi
+        if [[ -f "${STUB_DIR}/protection/${owner}__${repo}" ]]; then
+          emit <"${STUB_DIR}/protection/${owner}__${repo}"
+        else
+          printf '{"message":"Branch not protected","status":"404"}'
+          echo 'gh: Branch not protected (HTTP 404)' >&2
+          exit 1
+        fi ;;
       "GET repos/"*"/contents/.github/workflows/standards-check.yml")
         # repos/<owner>/<repo>/contents/...
         rest="${path#repos/}"; owner="${rest%%/*}"; rest="${rest#*/}"; repo="${rest%%/*}"

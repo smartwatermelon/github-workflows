@@ -10,25 +10,30 @@ _bad() { echo "  FAIL $1"; fail=$((fail + 1)); }
 
 _fixture() { # creates a fresh STUB_DIR with two owners, four repos
   STUB_DIR="$(mktemp -d)"; export STUB_DIR
-  mkdir -p "${STUB_DIR}/repos" "${STUB_DIR}/files"
+  mkdir -p "${STUB_DIR}/repos" "${STUB_DIR}/files" "${STUB_DIR}/protection" "${STUB_DIR}/types"
   cat >"${STUB_DIR}/repos/acme.json" <<'EOF'
-[{"name":"alpha","isArchived":false,"defaultBranchRef":{"name":"main"}},
- {"name":"beta","isArchived":false,"defaultBranchRef":{"name":"main"}},
- {"name":"old","isArchived":true,"defaultBranchRef":{"name":"main"}}]
+[{"full_name":"acme/alpha","owner":{"login":"acme"},"archived":false,"fork":false,"default_branch":"main"},
+ {"full_name":"acme/beta","owner":{"login":"acme"},"archived":false,"fork":false,"default_branch":"main"},
+ {"full_name":"acme/old","owner":{"login":"acme"},"archived":true,"fork":false,"default_branch":"main"}]
 EOF
   cat >"${STUB_DIR}/repos/nite.json" <<'EOF'
-[{"name":"gamma","isArchived":false,"defaultBranchRef":{"name":"main"}}]
+[{"full_name":"nite/gamma","owner":{"login":"nite"},"archived":false,"fork":false,"default_branch":"main"}]
 EOF
   cp "${stub}" "${STUB_DIR}/files/acme__beta"          # beta already CURRENT
   printf 'name: Different\n' >"${STUB_DIR}/files/nite__gamma"  # gamma DIFFERS
-  printf 'acme/alpha-ignored\n' >"${STUB_DIR}/ignore"
+  _required acme__beta
+  _required nite__gamma
+  printf 'acme/alpha-ignored  # fixture reason\n' >"${STUB_DIR}/ignore"
   : >"${STUB_DIR}/calls.log"
 }
 
-# --extra-repos "" is required: the script's default EXTRA names five real
-# twistedmelonman repos, which the fixture does not know about. They would
-# read as MISSING and add PUTs that the counts below do not expect.
-run() { BULK_GH="${here}/stub-gh/gh" BULK_STUB_FILE="${stub}" BULK_IGNORE_FILE="${STUB_DIR}/ignore" bash "${script}" --owners acme,nite --extra-repos "" "$@"; }
+_required() { # <owner>__<repo>: protection lists the standards check
+  printf '{"required_status_checks":{"contexts":["standards-check / run-standards-check"],"checks":[{"context":"standards-check / run-standards-check"}]}}\n' \
+    >"${STUB_DIR}/protection/$1"
+}
+
+# Floor 1: the real floor is sized for the real fleet. Case 14 tests it.
+run() { BULK_GH="${here}/stub-gh/gh" BULK_STUB_FILE="${stub}" BULK_IGNORE_FILE="${STUB_DIR}/ignore" BULK_MIN_REPOS="${MIN:-1}" bash "${script}" --owners "${OWNERS:-acme,nite}" --extra-repos "" "$@"; }
 
 # 1. dry run classifies every repo and writes nothing
 _fixture
@@ -62,9 +67,9 @@ if grep -q 'PUT repos/nite/gamma' "${STUB_DIR}/calls.log"; then _bad "DIFFERS wa
 
 # 5. ignore file honored; --only restricts
 _fixture
-printf 'acme/alpha\n' >"${STUB_DIR}/ignore"
+printf 'acme/alpha   # kept out on purpose\n' >"${STUB_DIR}/ignore"
 out="$(run 2>&1)" || true
-if grep -q '^IGNORED   *acme/alpha' <<<"${out}"; then _ok "ignore file honored"; else _bad "ignore file"; fi
+if grep -q '^IGNORED   *acme/alpha  kept out on purpose$' <<<"${out}"; then _ok "ignore file honored, reason printed"; else _bad "ignore file: ${out}"; fi
 _fixture
 out="$(run --only nite/gamma 2>&1)" || true
 if grep -q 'acme/' <<<"${out}"; then _bad "--only leaked other repos"; else _ok "--only restricts"; fi
@@ -124,9 +129,83 @@ if grep -q '^pr create' "${STUB_DIR}/calls.log"; then _bad "PR opened after a fa
 
 # 11. --extra-repos adds explicit owner/repo entries outside --owners
 _fixture
-mkdir -p "${STUB_DIR}/repos"; printf '[]\n' >"${STUB_DIR}/repos/solo.json"
 out="$(run --extra-repos solo/thing 2>&1)" || true
 if grep -q '^MISSING   *solo/thing' <<<"${out}"; then _ok "--extra-repos included"; else _bad "--extra-repos: ${out}"; fi
+
+# 12. forks are FORK, never MISSING, and never written
+_fixture
+cat >"${STUB_DIR}/repos/nite.json" <<'EOF'
+[{"full_name":"nite/gamma","owner":{"login":"nite"},"archived":false,"fork":false,"default_branch":"main"},
+ {"full_name":"nite/forked","owner":{"login":"nite"},"archived":false,"fork":true,"default_branch":"main"}]
+EOF
+out="$(run --apply --mode=push 2>&1)" || true
+if grep -q '^FORK  *nite/forked' <<<"${out}"; then _ok "fork is FORK"; else _bad "fork classification: ${out}"; fi
+if grep -q 'PUT repos/nite/forked' "${STUB_DIR}/calls.log"; then _bad "fork was written"; else _ok "fork not written"; fi
+
+# 13. caller present: not required / Free plan / bare 403
+_fixture
+rm "${STUB_DIR}/protection/acme__beta"
+out="$(run 2>&1)" || true
+if grep -q '^CALLER-ONLY  *acme/beta' <<<"${out}"; then _ok "unprotected caller is CALLER-ONLY"; else _bad "caller-only: ${out}"; fi
+_fixture
+printf '{"required_status_checks":{"contexts":["other"],"checks":[{"context":"other"}]}}\n' >"${STUB_DIR}/protection/acme__beta"
+out="$(run 2>&1)" || true
+if grep -q '^CALLER-ONLY  *acme/beta' <<<"${out}"; then _ok "protected without the check is CALLER-ONLY"; else _bad "caller-only (other check): ${out}"; fi
+_fixture
+mkdir -p "${STUB_DIR}/protection-free"; : >"${STUB_DIR}/protection-free/acme__beta"
+out="$(run 2>&1)" || true
+if grep -q '^CANNOT-REQUIRE  *acme/beta' <<<"${out}"; then _ok "Free-plan private is CANNOT-REQUIRE"; else _bad "cannot-require: ${out}"; fi
+_fixture
+mkdir -p "${STUB_DIR}/protection-fail"; : >"${STUB_DIR}/protection-fail/acme__beta"
+rc=0
+out="$(run 2>&1)" || rc=$?
+if grep -q '^ERROR  *acme/beta  protection lookup' <<<"${out}"; then _ok "bare 403 on protection is ERROR"; else _bad "bare 403: ${out}"; fi
+if [[ "${rc}" == "1" ]]; then _ok "protection ERROR exits 1"; else _bad "protection ERROR exit ${rc}"; fi
+
+# 14. known-bad: a listing that returns too few repos must fail, write nothing
+_fixture
+rc=0
+out="$(MIN=10 run --apply --mode=push 2>&1)" || rc=$?
+if [[ "${rc}" == "2" ]] && grep -q 'below the sanity floor' <<<"${out}"; then _ok "short listing fails the floor"; else _bad "floor: rc=${rc} ${out}"; fi
+if grep -q 'PUT' "${STUB_DIR}/calls.log"; then _bad "short listing still wrote"; else _ok "short listing wrote nothing"; fi
+if grep -qE '^(MISSING|CURRENT|DIFFERS) ' <<<"${out}"; then _bad "short listing still classified repos"; else _ok "short listing classified nothing"; fi
+
+# 15. known-bad: one owner's listing is empty (wrong token) -> fatal
+_fixture
+printf '[]\n' >"${STUB_DIR}/repos/nite.json"
+rc=0
+out="$(run --apply --mode=push 2>&1)" || rc=$?
+if [[ "${rc}" == "2" ]] && grep -q 'nite listing returned no repos' <<<"${out}"; then _ok "empty owner listing is fatal"; else _bad "empty listing: rc=${rc} ${out}"; fi
+if grep -q 'PUT' "${STUB_DIR}/calls.log"; then _bad "empty listing still wrote"; else _ok "empty listing wrote nothing"; fi
+
+# 16. rows owned by someone else do not count (wrong token returns other repos)
+_fixture
+printf '[{"full_name":"x/y","owner":{"login":"x"},"archived":false,"fork":false,"default_branch":"main"}]\n' >"${STUB_DIR}/repos/nite.json"
+rc=0
+out="$(run 2>&1)" || rc=$?
+if [[ "${rc}" == "2" ]]; then _ok "foreign rows are filtered out"; else _bad "foreign rows: rc=${rc} ${out}"; fi
+
+# 17. a user owner is listed through user/repos, not orgs/
+_fixture
+printf 'User\n' >"${STUB_DIR}/types/solo"
+printf '[{"full_name":"solo/priv","owner":{"login":"solo"},"archived":false,"fork":false,"default_branch":"main"}]\n' >"${STUB_DIR}/user-repos.json"
+out="$(OWNERS=acme,solo run 2>&1)" || true
+if grep -q '^MISSING  *solo/priv' <<<"${out}"; then _ok "user owner listed"; else _bad "user owner: ${out}"; fi
+if grep -q 'orgs/solo' "${STUB_DIR}/calls.log"; then _bad "user owner listed via orgs/"; else _ok "user owner not listed via orgs/"; fi
+
+# 18. an ignore entry without a reason is an ERROR, not a silent skip
+_fixture
+printf 'acme/alpha\n' >"${STUB_DIR}/ignore"
+rc=0
+out="$(run 2>&1)" || rc=$?
+if grep -q '^ERROR  *acme/alpha  listed in the ignore file without a reason' <<<"${out}" && [[ "${rc}" == "1" ]]; then _ok "reasonless ignore is ERROR"; else _bad "reasonless ignore: rc=${rc} ${out}"; fi
+
+# 19. a mapped owner with no token set is fatal before any API call
+_fixture
+rc=0
+out="$(GH_TOKEN_NOS="" OWNERS=nightowlstudiollc run 2>&1)" || rc=$?
+if [[ "${rc}" == "2" ]] && grep -q 'GH_TOKEN_NOS is not set' <<<"${out}"; then _ok "missing owner token is fatal"; else _bad "missing token: rc=${rc} ${out}"; fi
+if [[ -s "${STUB_DIR}/calls.log" ]]; then _bad "API called without a token"; else _ok "no API call without a token"; fi
 
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

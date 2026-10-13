@@ -10,10 +10,6 @@
 # cannot seed (can_approve_pull_request_reviews, needed for
 # dependabot-auto-merge.yml's approval step — see issue #87).
 #
-# What this does NOT do: install the CLAUDE_CODE_OAUTH_TOKEN secret. There is
-# no way to script that — it requires running `/install-github-app` from
-# Claude Code, a one-time interactive step. This script prints a reminder.
-#
 # Usage:
 #   ./new-smartwatermelon-repo.sh <name> [--private]
 #
@@ -65,12 +61,7 @@ gh api -X PUT "repos/${REPO}/actions/permissions/workflow" \
   -f default_workflow_permissions=read
 
 echo ""
-echo "==> ${REPO} created and configured. One manual step remains:"
+echo "==> ${REPO} created and configured."
 echo ""
-echo "    Run /install-github-app from Claude Code (or add the"
-echo "    CLAUDE_CODE_OAUTH_TOKEN secret manually under Settings ->"
-echo "    Secrets and variables -> Actions) so claude.yml and"
-echo "    claude-code-review.yml can run."
-echo ""
-echo "    Optional: add 'claude-review / run-review' as a required"
+echo "    Optional: add 'standards-check / run-standards-check' as a required"
 echo "    status check under Settings -> Branches."

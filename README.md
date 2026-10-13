@@ -84,7 +84,6 @@ which reusable workflow the caller invokes. Use the standard names:
 
 | Caller filename | Calls |
 | --- | --- |
-| `claude.yml` | `claude-assistant.yml` (note: the names differ) |
 | `dependabot-auto-merge.yml` | `dependabot-auto-merge.yml` |
 | `standards-check.yml` | `standards-check.yml` |
 
@@ -548,155 +547,12 @@ repo-scoped, not per-file.
 
 ---
 
-## `claude-assistant`
+## `claude-assistant` (deprecated)
 
-Reusable workflow that invokes Claude Code Action. The caller handles triggers
-and the `author_association` auth guard; this workflow handles the Claude
-invocation itself.
-
-### Setup
-
-Create `.github/workflows/claude.yml` in your repo:
-
-```yaml
-name: Claude Code
-
-on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-  issues:
-    types: [opened, assigned]
-  pull_request_review:
-    types: [submitted]
-
-jobs:
-  claude:
-    if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
-    # The v3 line, not v1: tags here are repo-wide, and v1 is frozen/deprecated.
-    # Track floating @v3, not an exact @v3.x.y — see "Versioning" above.
-    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3
-    secrets:
-      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-```
-
-Add `CLAUDE_CODE_OAUTH_TOKEN` to your repository or organization secrets.
-
-### Inputs
-
-| Input | Type | Default | Description |
-| ----- | ---- | ------- | ----------- |
-| `allowed_tools` | string | `''` | Tool allowlist passed as `--allowed-tools`. Additive — see below. Empty = action default policy. |
-| `disallowed_tools` | string | `''` | Tool denylist passed as `--disallowed-tools`. Genuinely revokes — see below. Empty = no denylist. |
-| `model` | string | `''` | Model ID passed as `--model`. Empty = action default model. |
-
-All three are optional. With all three empty the workflow passes no
-`claude_args` at all, so behavior is identical to a caller that sets none.
-
-#### Restricting tools (recommended)
-
-The assistant runs with `id-token: write` and a `CLAUDE_CODE_OAUTH_TOKEN`. If
-your repo has an opinion about what Claude should be able to run, encode it as
-an allowlist rather than relying on whatever the action's defaults happen to
-be.
-
-The example below keeps `Edit`/`Write` — the assistant is expected to change
-files in its checkout, so those are in scope — but grants only **read-only
-`git`/`gh` subcommands**, so destructive variants (`git push`, `git reset`,
-`git checkout`, `git clean`, `gh pr merge`) are never granted *by this repo*.
-Read the additive-semantics note below before treating that as a guarantee:
-
-```yaml
-    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3
-    with:
-      allowed_tools: 'Read,Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git ls-files:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment'
-      model: claude-opus-4-7
-    secrets:
-      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-```
-
-`mcp__github_inline_comment__create_inline_comment` in the example only works
-if that MCP server is available to the run; drop it if you aren't using it.
-
-#### What `allowed_tools` does and does not do
-
-**It is additive.** Verified against `claude-code-action` v1.0.193: in tag mode
-(what this workflow runs) the action emits its own
-`--allowedTools "<tag mode tools>"` and appends your `claude_args` after it,
-and its parser treats `--allowedTools`/`--allowed-tools` as aliases and
-**unions** every occurrence rather than letting the last win.
-
-So `allowed_tools` can only **grant** tools on top of the action's baseline —
-it cannot revoke anything the action grants itself. It restores the ability to
-express a per-repo tool policy without inlining the action, and it keeps that
-policy visible in the caller stub, but do not read it as a hard sandbox.
-
-#### Revoking a tool: `disallowed_tools`
-
-Use `disallowed_tools` when you need an actual restriction. It emits
-`--disallowed-tools`, a real Claude Code CLI flag that `claude_args` passes
-through to.
-
-**Verified against `claude-code-action` v1.0.193**, the SHA this workflow
-pins, using the same source-reading method that established `allowed_tools`
-is additive:
-
-- `src/modes/tag/index.ts:186` emits **only** `--allowedTools`. Grepping the
-  action for `disallowedTools` finds **zero** occurrences in tag mode and zero
-  in agent mode — nothing upstream emits a denylist for yours to compete with.
-- `base-action/src/parse-sdk-options.ts:245-266` merges your value (accepting
-  both `--disallowedTools` and `--disallowed-tools` spellings), and `:321-322`
-  sets it on the SDK options object rather than leaving it in `extraArgs`.
-
-This is why `disallowed_tools` does not repeat the `allowed_tools` surprise.
-That input can only ever *add* because tag mode emits its own allowlist and
-the parser unions the two. The denylist has no such counterpart.
-
-One thing this trace does **not** establish: the SDK's internal precedence
-when a tool is named in both the allow and deny lists. That is Claude Code
-CLI behavior, outside this action — and you cannot reach it through this
-input alone, since tag mode emits no denylist. It takes a caller listing the
-same tool in both of its own inputs, which is a self-contradictory config
-rather than the revocation path this input exists for.
-
-```yaml
-    uses: smartwatermelon/github-workflows/.github/workflows/claude-assistant.yml@v3
-    with:
-      disallowed_tools: 'Bash(git push:*),Bash(gh pr merge:*),WebFetch'
-    secrets:
-      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-```
-
-All three inputs are validated before use. `model` must match
-`[a-zA-Z0-9._-]+`; `allowed_tools` and `disallowed_tools` are passed via `env:`
-(never interpolated into a `run:` line) and reject quotes, backticks, `$`, `;`,
-`&`, `|`, backslashes, and newlines, so a caller cannot break out of the
-generated command line. Spaces are permitted because tool specs need them
-(`Bash(gh pr view:*)`), which is why the generated arguments stay quoted.
-
-There is deliberately **no free-form `claude_args` passthrough**: an opaque
-arg blob would let a caller pass flags that *widen* permissions, which is the
-opposite of what an allowlist is for. Discrete inputs keep the surface
-auditable from the caller stub.
-
-### Security note
-
-The `author_association` guard in the `if:` condition **must stay in the caller**
-and must not be removed. Without it, any GitHub user can open an issue with
-injected instructions and Claude will execute them
-([clinejection-style attack](https://grith.ai/blog/clinejection-when-your-ai-tool-installs-another)).
-The reusable workflow cannot enforce this guard itself — it must be in the
-calling workflow's job condition.
-
-### Compatibility
-
-Requires `CLAUDE_CODE_OAUTH_TOKEN`. Repos using `anthropic_api_key` directly
-are not compatible with this reusable workflow.
+`claude-assistant.yml` is deprecated. No fleet repo uses it except `kebab-tax`
+and `kebab-tax-netlify`; it will be deleted once those callers are gone.
+`CLAUDE_CODE_OAUTH_TOKEN` no longer exists, so callers fail at the token
+precondition. Do not set it up in a new repo.
 
 ---
 
@@ -715,20 +571,15 @@ the one repo setting no template can seed."
 ./new-smartwatermelon-repo.sh <name> [--private]
 ```
 
-This does three things:
+This does two things:
 
 1. `gh repo create <name> --template smartwatermelon/repo-template` — a
    real [GitHub template repository](https://github.com/smartwatermelon/repo-template)
-   containing caller stubs for `claude.yml`, `claude-code-review.yml`,
-   `dependabot-auto-merge.yml`, and a `.github/dependabot.yml`. Template
+   containing the standard caller stubs and a `.github/dependabot.yml`. Template
    repos are a general GitHub feature, not gated to Organizations, so this
    part genuinely works the same for a User account as it would for an Org.
 2. Sets `can_approve_pull_request_reviews: true` via the Actions API — the
    one setting a template repo cannot seed, and the exact fix from issue
    [#87](https://github.com/smartwatermelon/github-workflows/issues/87).
-3. Prints a reminder for the one step that can't be scripted at all: run
-   `/install-github-app` from Claude Code (or add the
-   `CLAUDE_CODE_OAUTH_TOKEN` secret manually) so the Claude workflows can
-   actually run.
 
 Plan: `docs/plans/2026-04-30-bulk-install-smartwatermelon-fleet.md`.

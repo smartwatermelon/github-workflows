@@ -1,5 +1,10 @@
 name: Claude Code Assistant
 
+# DEPRECATED. Only kebab-tax and kebab-tax-netlify still call this.
+# Delete it when those callers are gone.
+
+# CLAUDE_CODE_OAUTH_TOKEN no longer exists, so callers fail at the token check.
+
 # Reusable workflow: invokes Claude Code Action when @claude is mentioned.
 # The caller workflow is responsible for event triggers and the
 # author_association guard that restricts who can invoke Claude.

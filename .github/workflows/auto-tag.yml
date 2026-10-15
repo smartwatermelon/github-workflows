@@ -6,7 +6,7 @@ name: Auto Tag
 # Version: highest strict vX.Y.Z tag with PATCH+1, or v<floor> if higher.
 # A commit that already has a vX.Y.Z tag is left alone.
 
-# Usage: copy auto-tag/caller-stub.yml. Its job grants contents: write and has:
+# Usage: copy auto-tag/caller-stub.yml. Its job grants contents: write and calls:
 
 #   uses: smartwatermelon/github-workflows/.github/workflows/auto-tag.yml@auto-tag-v1
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Validation for auto-tag/next-version.sh and auto-tag/git-credential-env.sh
-# on throwaway git repos. Never touches this repo's tags.
+# Validation for auto-tag/{next-version,push-tag,git-credential-env}.sh on
+# throwaway git repos. Never touches this repo's tags.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="${here}/../auto-tag/next-version.sh"

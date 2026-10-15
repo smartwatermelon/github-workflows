@@ -37,3 +37,7 @@ paths:
       # Same gap as standards-check.yml above: it checks out netlify/ at
       # job.workflow_sha. Remove with the entry above.
       - 'property "workflow_sha" is not defined in object type'
+  .github/workflows/auto-tag.yml:
+    ignore:
+      # Same gap again: it checks out auto-tag/ at job.workflow_sha.
+      - 'property "workflow_sha" is not defined in object type'

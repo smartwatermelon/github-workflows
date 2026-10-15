@@ -1,0 +1,135 @@
+name: Auto Tag
+
+# Tags each push to main with the next patch version, so an install can
+# report its version (dev-env#72). README.md has the details.
+
+# Version: highest strict vX.Y.Z tag with PATCH+1, or v<floor> if higher.
+# A commit that already has a vX.Y.Z tag is left alone.
+
+# Usage: copy auto-tag/caller-stub.yml. Its job grants contents: write and has:
+
+#   uses: smartwatermelon/github-workflows/.github/workflows/auto-tag.yml@auto-tag-v1
+
+# Versioning: floating auto-tag-v1 and exact auto-tag-vX.Y.Z, prefixed
+# like standards-check-v1 because tags here are repo-scoped.
+
+# A tag pushed with GITHUB_TOKEN starts no other workflow in the caller.
+
+on:
+  workflow_call:
+    inputs:
+      floor:
+        description: >-
+          Lowest version to tag, as MAJOR.MINOR.PATCH with no leading v.
+          Used when no vX.Y.Z tag exists or the next patch is below it.
+        type: string
+        default: "1.0.0"
+    outputs:
+      version:
+        description: The tag pushed by this run (vX.Y.Z), or empty if the commit was already tagged.
+        value: ${{ jobs.auto-tag.outputs.version }}
+
+permissions: {}
+
+jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the version tag
+    # One run at a time per repo, queued, so two quick merges take different
+    # numbers. README.md covers the dropped-pending-run case.
+    concurrency:
+      group: auto-tag-${{ github.repository }}
+      cancel-in-progress: false
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      # Only a push to the default branch gets a version. Anything else is a
+      # miswired caller, so fail.
+      - name: Refuse anything but a push to the default branch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" != "push" ] || [ "${REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::auto-tag runs on push to ${DEFAULT_BRANCH}, not '${EVENT_NAME}' on '${REF}'"
+            exit 2
+          fi
+
+      # fetch-depth: 0 brings every tag. No token stays on disk; the push
+      # step supplies it.
+      - name: Checkout caller repository with all tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: repo
+
+      # An empty ref makes checkout take the default branch, so fail instead.
+      # Same step as standards-check.yml.
+      - name: Resolve the workflow SHA
+        id: workflow_sha
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOB_WORKFLOW_SHA}" ]; then
+            echo "::error::job.workflow_sha is empty; refusing to check out an ambiguous ref"
+            exit 2
+          fi
+          echo "sha=${JOB_WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "workflow SHA: ${JOB_WORKFLOW_SHA}"
+
+      - name: Checkout auto-tag scripts at the called-workflow SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: smartwatermelon/github-workflows
+          ref: ${{ steps.workflow_sha.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: auto-tag-src
+          sparse-checkout: |
+            auto-tag
+
+      - name: Pick the version
+        id: next
+        working-directory: repo
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          FLOOR: ${{ inputs.floor }}
+        run: |
+          set -euo pipefail
+          bash ../auto-tag-src/auto-tag/next-version.sh >> "${GITHUB_OUTPUT}"
+
+      # git gets GH_TOKEN from a credential helper: not in .git/config or
+      # argv. The empty entry drops other helpers.
+      - name: Tag the commit and push the tag
+        if: steps.next.outputs.version != ''
+        working-directory: repo
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+          TARGET_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: ""
+          GIT_CONFIG_KEY_1: credential.helper
+          GIT_CONFIG_VALUE_1: ${{ github.workspace }}/auto-tag-src/auto-tag/git-credential-env.sh
+        run: |
+          set -euo pipefail
+          bash ../auto-tag-src/auto-tag/push-tag.sh
+
+      - name: Write the summary
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${VERSION}" ]; then
+            echo "Tagged \`${TARGET_SHA}\` as **${VERSION}**." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "\`${TARGET_SHA}\` already carries a version tag; nothing tagged." >> "${GITHUB_STEP_SUMMARY}"
+          fi

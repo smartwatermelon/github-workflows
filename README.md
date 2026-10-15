@@ -547,6 +547,98 @@ repo-scoped, not per-file.
 
 ---
 
+## `auto-tag.yml`
+
+Reusable workflow that tags each push to the default branch with the next
+patch version, so an install can say which version it installed
+([dev-env#72](https://github.com/smartwatermelon/dev-env/issues/72)).
+Callers: dotfiles, claude-config, and scripts.
+
+### How the version is picked
+
+1. If the pushed commit (`github.sha`) already has a `vX.Y.Z` tag, the run
+   does nothing and passes. A re-run is a no-op.
+2. Otherwise it takes the highest strict `vMAJOR.MINOR.PATCH` tag in the repo
+   (`sort -V`, so `v1.0.10` is above `v1.0.9`) and adds 1 to PATCH.
+3. The result is that or `v<floor>`, whichever is higher. With no `vX.Y.Z`
+   tag at all, the result is `v<floor>`.
+
+Only strict numeric tags count: `standards-check-v1`, `v3`, `v1.2.3-rc1`,
+`1.0.0`, and `v01.0.0` are ignored. Examples with the default floor `1.0.0`:
+an old `v0.0.2` gives `v1.0.0`; `v1.0.0` and `v1.0.4` give `v1.0.5`.
+
+The tag is lightweight and is pushed as `git push origin refs/tags/vX.Y.Z`,
+never `--force`. If the name already exists on the remote, the push fails and
+the job goes red; no tag ever moves. The job has a concurrency group per
+caller repo (`auto-tag-<owner/repo>`, never cancelled), so two quick merges
+run one after the other and take different numbers. GitHub keeps only one
+pending run per group: if three merges land while a run is in progress, the
+middle one is dropped and its commit stays untagged. The next tag is on a
+later commit that contains it.
+
+Any event other than a push to the default branch fails the job.
+
+The version is written to the job summary and returned as the `version`
+output (empty when the commit was already tagged).
+
+### Credentials
+
+Both checkouts use `persist-credentials: false`, so no token is written to
+`.git/config`. The push step gets `${{ github.token }}` as `GH_TOKEN` and
+hands it to git through `auto-tag/git-credential-env.sh`, a credential helper
+that reads it from the environment. The token is never in a file on disk or
+in any process's argv. The helper and the scripts come from this repo,
+checked out at `job.workflow_sha` as in `netlify-site-checks.yml`. No caller
+code runs in the job.
+
+A tag pushed with `GITHUB_TOKEN` does not start other workflows, so an
+`on: push: tags` workflow in the caller does not run for these tags.
+
+### Setup
+
+`.github/workflows/auto-tag.yml` in the caller repo. The canonical copy is
+`auto-tag/caller-stub.yml`:
+
+```yaml
+name: Auto Tag
+on:
+  push:
+    branches: [main]
+permissions: {}
+jobs:
+  auto-tag:
+    permissions:
+      contents: write # push the version tag
+    uses: smartwatermelon/github-workflows/.github/workflows/auto-tag.yml@auto-tag-v1
+```
+
+`contents: write` is granted on the job, not the workflow, so zizmor's
+`excessive-permissions` does not fire on the caller.
+
+### Inputs
+
+| Input | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `floor` | string | `"1.0.0"` | Lowest version to tag, `MAJOR.MINOR.PATCH` with no leading `v`. Anything else fails the job. |
+
+### Tests
+
+`tests/test-auto-tag.sh` runs `auto-tag/next-version.sh` against throwaway
+git repos, covering every rule above, and runs `auto-tag/push-tag.sh`
+against a local bare remote to show that a colliding tag fails without
+moving. It never touches this repo's tags.
+
+### Versioning
+
+| Tag | Meaning |
+| ----- | --------- |
+| `auto-tag-v1` | Floating major for callers, moved manually and human-authorized, like `standards-check-v1`. |
+| `auto-tag-vX.Y.Z` | Exact release. |
+
+Prefixed for the same reason as `standards-check-v*`.
+
+---
+
 ## `claude-assistant` (deprecated)
 
 `claude-assistant.yml` is deprecated. No fleet repo uses it except `kebab-tax`

@@ -237,8 +237,14 @@ executes PR code: the only actions are API calls (`dependabot/fetch-metadata`,
 to this file.** The guardrail below enforces this (closes #64):
 
 - `self-review.yml`'s `guard-no-checkout` job greps this repo's own
-  copy of `dependabot-auto-merge.yml` and fails the PR if
+  copy of `dependabot-auto-merge.yml`, and its caller
+  `self-dependabot-auto-merge.yml`, and fails the PR if
   `actions/checkout` appears.
+
+This repo auto-merges its own Dependabot PRs through
+`self-dependabot-auto-merge.yml`. It pins `@dependabot-auto-merge-v2`
+rather than a local path, so an unreleased change to the reusable
+workflow never decides merges here.
 
 ### Versioning
 

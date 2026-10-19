@@ -22,24 +22,26 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Fail if dependabot-auto-merge.yml uses actions/checkout
+      - name: Fail if a pull_request_target workflow uses actions/checkout
         run: |
-          file=".github/workflows/dependabot-auto-merge.yml"
-          if [ ! -f "$file" ]; then
-            echo "::notice::${file} not found — nothing to check."
-            exit 0
-          fi
-          # Strip comment lines first — the header comment in this file
-          # legitimately names `actions/checkout` while explaining why it
-          # must never be added, which a bare substring grep would flag
-          # against itself. Match the real usage form (a `uses:` step),
-          # not just the string appearing anywhere in the file.
-          if grep -v '^\s*#' "$file" | grep -qE 'uses:\s*actions/checkout'; then
-            echo "::error::${file} must NEVER use actions/checkout."
-            echo "::error::This workflow uses pull_request_target with no-checkout as its"
-            echo "::error::core safety property. Adding actions/checkout would expose"
-            echo "::error::base-branch secrets to externally-authored PR content. See the"
-            echo "::error::header comment in ${file} and issue #64."
-            exit 1
-          fi
-          echo "No actions/checkout found in ${file} — guardrail passed."
+          # The reusable workflow and this repo's own caller of it both
+          # run on pull_request_target.
+          for file in .github/workflows/dependabot-auto-merge.yml \
+                      .github/workflows/self-dependabot-auto-merge.yml; do
+            if [ ! -f "$file" ]; then
+              echo "::notice::${file} not found — nothing to check."
+              continue
+            fi
+            # Skip comments: the header names actions/checkout on purpose.
+
+            # Match only a real `uses:` step.
+            if grep -v '^\s*#' "$file" | grep -qE 'uses:\s*actions/checkout'; then
+              echo "::error::${file} must NEVER use actions/checkout."
+              echo "::error::This workflow uses pull_request_target with no-checkout as its"
+              echo "::error::core safety property. Adding actions/checkout would expose"
+              echo "::error::base-branch secrets to externally-authored PR content. See the"
+              echo "::error::header comment in dependabot-auto-merge.yml and issue #64."
+              exit 1
+            fi
+            echo "No actions/checkout found in ${file} — guardrail passed."
+          done

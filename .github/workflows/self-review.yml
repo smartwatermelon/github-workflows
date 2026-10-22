@@ -45,3 +45,18 @@ jobs:
             fi
             echo "No actions/checkout found in ${file} — guardrail passed."
           done
+
+  markdownlint-drift:
+    # standards/markdownlint.json vs dotfiles' canonical copy. Not required.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Compare with dotfiles markdownlint-cli/.markdownlint.json
+        run: bash tests/test-markdownlint-drift.sh

@@ -277,7 +277,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
+        uses: anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c # v1.0.254
         with:
           # claude-code-action rejects non-User actors unless explicitly allowed.
           # The caller's author_association guard (OWNER/MEMBER/COLLABORATOR) is

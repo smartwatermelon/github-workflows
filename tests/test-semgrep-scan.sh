@@ -111,5 +111,16 @@ else
   _bad "caller stub names changed"
 fi
 
+# 10. the README setup example has the stub's triggers
+stub_on="$(awk '/^on:$/{f=1} /^permissions:$/{f=0} f && !/^ *#/' "${stub_file}")"
+readme_on="$(awk '/^## `semgrep-scan.yml`$/{m=1} m && /^### Setup$/{s=1}
+  s && /^```yaml$/{y=1; next} y && /^```$/{exit}
+  y && /^on:$/{f=1} y && /^permissions:$/{f=0} f && !/^ *#/' "${readme}")"
+if [[ -n "${stub_on}" && "${stub_on}" == *"push:"* && "${stub_on}" == "${readme_on}" ]]; then
+  _ok "README setup example has the caller stub's triggers"
+else
+  _bad "trigger drift: stub='${stub_on}' README='${readme_on}'"
+fi
+
 echo "${pass} passed, ${fail} failed"
 [[ "${fail}" -eq 0 ]]

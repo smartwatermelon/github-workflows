@@ -1,0 +1,17 @@
+name: Semgrep Scan
+on:
+  pull_request:
+  workflow_dispatch:
+  # A push run scans the whole tree and fails on any finding, old or new.
+  # push:
+  #   branches: [main]
+permissions:
+  contents: read
+jobs:
+  semgrep-scan:
+    uses: smartwatermelon/github-workflows/.github/workflows/semgrep-scan.yml@semgrep-scan-v1
+    # with:
+    #   rulesets: p/default p/javascript p/typescript p/python p/ruby  # the default
+    secrets:
+      # Optional. Absent or empty: scan mode with the rulesets above.
+      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}

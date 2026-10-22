@@ -1,0 +1,102 @@
+name: Semgrep Scan
+
+# Semgrep CE, in place of CodeQL for private repos without GitHub Code
+# Security (dev-env#166). Details: README.md.
+
+# pull_request fails only on new findings (--baseline-commit). push and
+# dispatch scan all. With SEMGREP_APP_TOKEN: `semgrep ci`.
+
+# Caller stub: semgrep/caller-stub.yml. The caller grants contents: read
+# and passes SEMGREP_APP_TOKEN by name, if it has one.
+
+# No SARIF upload: code scanning on a private repo needs the GitHub Code
+# Security SKU, which is what this workflow exists to avoid.
+
+on:
+  workflow_call:
+    inputs:
+      rulesets:
+        description: >-
+          Semgrep configs, separated by spaces or newlines, each passed as
+          --config. Ignored when SEMGREP_APP_TOKEN is set.
+        type: string
+        default: p/default p/javascript p/typescript p/python p/ruby
+      timeout-minutes:
+        description: Job timeout.
+        type: number
+        default: 20
+    secrets:
+      SEMGREP_APP_TOKEN:
+        description: >-
+          Optional Semgrep platform token. When set, the scan runs as
+          `semgrep ci` and the platform's policies choose the rules.
+        required: false
+
+permissions: {}
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      SEMGREP_SEND_METRICS: "off"
+    steps:
+      # Full history: --baseline-commit needs the PR base commit locally.
+      - name: Checkout caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: repo
+
+      # An empty ref makes checkout take the default branch, so fail instead.
+      # Same step as standards-check.yml.
+      - name: Resolve the workflow SHA
+        id: workflow_sha
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOB_WORKFLOW_SHA}" ]; then
+            echo "::error::job.workflow_sha is empty; refusing to check out an ambiguous ref"
+            exit 2
+          fi
+          echo "sha=${JOB_WORKFLOW_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "workflow SHA: ${JOB_WORKFLOW_SHA}"
+
+      - name: Checkout semgrep scripts at the called-workflow SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: smartwatermelon/github-workflows
+          ref: ${{ steps.workflow_sha.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: semgrep-src
+          sparse-checkout: |
+            semgrep
+
+      # A venv: the runner's Python refuses a global pip install (PEP 668).
+      # Dependabot bumps the pin in semgrep/requirements.txt.
+      - name: Install Semgrep
+        env:
+          VENV: ${{ runner.temp }}/semgrep-venv
+        run: |
+          set -euo pipefail
+          python3 -m venv "${VENV}"
+          "${VENV}/bin/pip" install --disable-pip-version-check --quiet \
+            -r semgrep-src/semgrep/requirements.txt
+          "${VENV}/bin/semgrep" --version
+
+      - name: Run Semgrep
+        working-directory: repo
+        env:
+          SEMGREP_BIN: ${{ runner.temp }}/semgrep-venv/bin/semgrep
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RULESETS: ${{ inputs.rulesets }}
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash ../semgrep-src/semgrep/run-semgrep.sh

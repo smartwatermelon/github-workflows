@@ -645,6 +645,109 @@ Prefixed for the same reason as `standards-check-v*`.
 
 ---
 
+## `semgrep-scan.yml`
+
+Reusable static-analysis check with Semgrep Community Edition
+([dev-env#166](https://github.com/smartwatermelon/dev-env/issues/166)). It
+stands in for CodeQL on the private `nightowlstudiollc` repos, which do not
+have GitHub Code Security. The pilot caller is nightowlstudiollc/reliquarist.
+
+It is **not** a required check. On a pull request it fails only on findings
+that are new in that PR, so existing findings in a repo do not turn every PR
+red.
+
+The triggering event and the secret pick the mode:
+
+| Event | `SEMGREP_APP_TOKEN` | Runs |
+| ----- | ------------------- | ---- |
+| `pull_request` | absent or empty | `semgrep scan --error --config <each ruleset> --baseline-commit <PR base SHA>` |
+| `push`, `workflow_dispatch` | absent or empty | `semgrep scan --error --config <each ruleset>` (whole tree) |
+| any of the three | set | `semgrep ci` |
+
+Any other event fails with exit 2, `pull_request_target` included.
+
+`--baseline-commit` makes Semgrep report only findings that are not also
+present at the PR base (`github.event.pull_request.base.sha`). The caller is
+checked out with `fetch-depth: 0` so that commit is in the history. A run
+whose base commit is missing fails with exit 2 instead of scanning the wrong
+range. A full scan on `push` or `workflow_dispatch` fails on every finding,
+old or new; that is why the caller stub leaves `push` commented out.
+
+**Token mode.** With `SEMGREP_APP_TOKEN` set, the workflow runs `semgrep ci`,
+which reports to the Semgrep platform. The platform's policies then choose
+the rules and the `rulesets` input is ignored. No repo uses a token today;
+the secret is there so a repo can move to the platform later without a new
+workflow. A PR from Dependabot or a fork gets no secrets, so it runs in scan
+mode.
+
+**No code-scanning upload.** The job has only `contents: read`: no
+`security-events: write` and no SARIF upload. Code scanning on a private repo
+needs the Code Security SKU this workflow exists to avoid. Findings appear in
+the job log.
+
+The mode logic is `semgrep/run-semgrep.sh`, checked out from this repo at
+`job.workflow_sha`, as in `netlify-site-checks.yml`. Semgrep is installed
+with pip into a venv from `semgrep/requirements.txt`, which pins one version;
+Dependabot (`pip`, `/semgrep`) bumps it. `SEMGREP_SEND_METRICS=off` and
+`--metrics=off` keep Semgrep from sending usage metrics. Registry rulesets
+(`p/...`) need no token.
+
+### Setup
+
+`.github/workflows/semgrep-scan.yml` in the caller repo. Keep that file name
+and the job name `semgrep-scan`: the daily digest will find callers by them.
+The canonical copy is `semgrep/caller-stub.yml`:
+
+```yaml
+name: Semgrep Scan
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  semgrep-scan:
+    uses: smartwatermelon/github-workflows/.github/workflows/semgrep-scan.yml@semgrep-scan-v1
+    secrets:
+      SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+```
+
+- The status check is `semgrep-scan / semgrep` (caller job / inner job).
+- Pass the secret by name, not with `secrets: inherit`. With no such secret
+  in the repo it is empty, and the run uses scan mode.
+- To skip paths, add a `.semgrepignore` to the caller repo.
+
+### Inputs
+
+| Input | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `rulesets` | string | `p/default p/javascript p/typescript p/python p/ruby` | Semgrep configs, separated by spaces or newlines, each passed as `--config`. Registry names or paths in the caller repo. Ignored in token mode. |
+| `timeout-minutes` | number | `20` | Job timeout. |
+
+| Secret | Required | Description |
+| ------ | -------- | ----------- |
+| `SEMGREP_APP_TOKEN` | no | Semgrep platform token. When set, the run is `semgrep ci` and the platform's policies replace `rulesets`. |
+
+### Tests
+
+`tests/test-semgrep-scan.sh` runs `semgrep/run-semgrep.sh` against a stub
+`semgrep` in `tests/stub-semgrep/` and a throwaway git repo. It covers each
+mode's arguments, that the token reaches Semgrep only through the
+environment, the exit-2 refusals, and that Semgrep's exit code passes
+through. It also checks that the `rulesets` default is the same in the
+workflow, the caller stub, and this README, and that the stub keeps the
+stable job name and `uses:` ref.
+
+### Versioning
+
+| Tag | Meaning |
+| ----- | --------- |
+| `semgrep-scan-v1` | Floating major for callers, moved manually and human-authorized, like `standards-check-v1`. |
+
+Prefixed for the same reason as `standards-check-v*`.
+
+---
+
 ## `claude-assistant` (deprecated)
 
 `claude-assistant.yml` is deprecated. No fleet repo uses it except `kebab-tax`

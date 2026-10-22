@@ -41,3 +41,7 @@ paths:
     ignore:
       # Same gap again: it checks out auto-tag/ at job.workflow_sha.
       - 'property "workflow_sha" is not defined in object type'
+  .github/workflows/semgrep-scan.yml:
+    ignore:
+      # Same gap again: it checks out semgrep/ at job.workflow_sha.
+      - 'property "workflow_sha" is not defined in object type'

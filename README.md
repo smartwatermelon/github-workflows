@@ -704,6 +704,8 @@ name: Semgrep Scan
 on:
   pull_request:
   workflow_dispatch:
+  push:
+    branches: [main]
 permissions:
   contents: read
 jobs:

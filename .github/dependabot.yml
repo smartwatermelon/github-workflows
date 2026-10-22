@@ -26,3 +26,11 @@ updates:
     # of ~30 repos is the same reason `cooldown` is omitted above — bumps
     # here should not wait. See #127.
     open-pull-requests-limit: 10
+  # Semgrep pin (semgrep/requirements.txt). No cooldown, as above. Callers
+  # get a bump only when the semgrep-scan-v1 tag moves. dev-env#166.
+  - package-ecosystem: "pip"
+    directory: "/semgrep"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"

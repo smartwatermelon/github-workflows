@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Stub semgrep for test-semgrep-scan.sh: writes argv to argv.log and
+# SEMGREP_APP_TOKEN to token.log, then exits STUB_RC.
+set -euo pipefail
+: "${STUB_DIR:?}"
+printf '%s\n' "$@" >"${STUB_DIR}/argv.log"
+printf '%s\n' "${SEMGREP_APP_TOKEN-}" >"${STUB_DIR}/token.log"
+exit "${STUB_RC:-0}"

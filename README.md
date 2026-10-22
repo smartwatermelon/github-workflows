@@ -652,9 +652,8 @@ Reusable static-analysis check with Semgrep Community Edition
 stands in for CodeQL on the private `nightowlstudiollc` repos, which do not
 have GitHub Code Security. The pilot caller is nightowlstudiollc/reliquarist.
 
-It is **not** a required check. On a pull request it fails only on findings
-that are new in that PR, so existing findings in a repo do not turn every PR
-red.
+Every caller makes it a required check, so Dependabot auto-merge waits for
+it. On a pull request it fails only on findings that are new in that PR.
 
 The triggering event and the secret pick the mode:
 
@@ -716,6 +715,8 @@ jobs:
 ```
 
 - The status check is `semgrep-scan / semgrep` (caller job / inner job).
+  After the first `push` run on `main` is green, add it to the default
+  branch's required status checks.
 - Pass the secret by name, not with `secrets: inherit`. With no such secret
   in the repo it is empty, and the run uses scan mode.
 - To skip paths, add a `.semgrepignore` to the caller repo.

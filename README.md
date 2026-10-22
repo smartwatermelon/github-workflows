@@ -671,7 +671,8 @@ present at the PR base (`github.event.pull_request.base.sha`). The caller is
 checked out with `fetch-depth: 0` so that commit is in the history. A run
 whose base commit is missing fails with exit 2 instead of scanning the wrong
 range. A full scan on `push` or `workflow_dispatch` fails on every finding,
-old or new; that is why the caller stub leaves `push` commented out.
+old or new. Fix a repo's existing findings before you add the caller, so
+its first `push` run on `main` is green.
 
 **Token mode.** With `SEMGREP_APP_TOKEN` set, the workflow runs `semgrep ci`,
 which reports to the Semgrep platform. The platform's policies then choose

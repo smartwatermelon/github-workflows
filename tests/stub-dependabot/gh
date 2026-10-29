@@ -3,9 +3,10 @@
 # (last repeats) and exits 8 while pending, like gh. api prints the base
 # branch's failing names from main-runs / main-statuses (already --jq-filtered).
 # A file fail.<cmd>[-<sub>] in STUB_DIR (fail.api, fail.pr-merge) makes it exit 1.
+# Each call is logged with the GH_TOKEN it ran under.
 set -euo pipefail
 : "${STUB_DIR:?}"
-printf '%s\n' "$*" >>"${STUB_DIR}/calls.log"
+printf '%s [token=%s]\n' "$*" "${GH_TOKEN:-}" >>"${STUB_DIR}/calls.log"
 key="$1"
 [[ "$1" == api ]] || key="$1-${2:-}"
 if [[ -f "${STUB_DIR}/fail.${key}" ]]; then

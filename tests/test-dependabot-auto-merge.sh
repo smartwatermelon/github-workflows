@@ -248,6 +248,7 @@ merge() {
   rc=0
   out="$(PATH="${here}/stub-dependabot:${PATH}" GITHUB_OUTPUT="${STUB_DIR}/out" \
     PR_URL=https://github.com/acme/site/pull/7 HEAD_SHA="${sha}" \
+    GH_TOKEN=ambient APP_TOKEN="${APP-app-token}" \
     bash -c "${merge_sh}" 2>&1)" || rc=$?
   reason="$(_out reason)"
 }
@@ -265,6 +266,25 @@ if _called "--remove-label dependabot-blocked,dependabot-blocked:timeout"; then
   _ok "merge clears blocked labels from earlier runs"
 else
   _bad "stale labels kept: $(<"${STUB_DIR}/calls.log")"
+fi
+if _called "--match-head-commit ${sha} https://github.com/acme/site/pull/7 [token=app-token]"; then
+  _ok "merge runs as the App, so push workflows start on main"
+else
+  _bad "merge token: $(<"${STUB_DIR}/calls.log")"
+fi
+if _called "pr review --approve https://github.com/acme/site/pull/7 [token=ambient]"; then
+  _ok "only the merge uses the App token"
+else
+  _bad "approve token: $(<"${STUB_DIR}/calls.log")"
+fi
+
+_fixture
+APP="" merge
+if [[ "${rc}" -eq 0 && "${reason}" == "merge-failed" ]] && ! _called "pr merge" \
+  && grep -qF "No merge App token" <<<"${out}"; then
+  _ok "no App token -> merge-failed, never a GITHUB_TOKEN merge"
+else
+  _bad "no App token: rc=${rc} reason='${reason}' calls=$(<"${STUB_DIR}/calls.log")"
 fi
 
 _fixture; : >"${STUB_DIR}/fail.pr-merge"

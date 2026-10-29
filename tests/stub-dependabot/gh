@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
-# Stub gh: pr view prints head; pr checks prints checks.<n>.json
-# (last repeats) and exits 8 while pending, like gh.
+# Stub gh: pr view prints head (or labels); pr checks prints checks.<n>.json
+# (last repeats) and exits 8 while pending, like gh. api prints the base
+# branch's failing names from main-runs / main-statuses (already --jq-filtered).
+# A file fail.<cmd>[-<sub>] in STUB_DIR (fail.api, fail.pr-merge) makes it exit 1.
 set -euo pipefail
 : "${STUB_DIR:?}"
 printf '%s\n' "$*" >>"${STUB_DIR}/calls.log"
-case "$1 $2" in
+key="$1"
+[[ "$1" == api ]] || key="$1-${2:-}"
+if [[ -f "${STUB_DIR}/fail.${key}" ]]; then
+  echo "stub gh: forced failure of $*" >&2
+  exit 1
+fi
+case "$1 ${2:-}" in
   "pr view")
-    cat "${STUB_DIR}/head"
+    if [[ "$*" == *labels* ]]; then
+      cat "${STUB_DIR}/labels" 2>/dev/null || true
+    else
+      cat "${STUB_DIR}/head"
+    fi
     ;;
   "pr checks")
     n=$(($(cat "${STUB_DIR}/checks.count" 2>/dev/null || echo 0) + 1))
@@ -17,6 +29,13 @@ case "$1 $2" in
     cat "${f}"
     if jq -e 'any(.[]; .bucket == "pending")' "${f}" >/dev/null 2>&1; then exit 8; fi
     ;;
+  "api "*/check-runs*)
+    cat "${STUB_DIR}/main-runs" 2>/dev/null || true
+    ;;
+  "api "*/status)
+    cat "${STUB_DIR}/main-statuses" 2>/dev/null || true
+    ;;
+  "pr review" | "pr merge" | "pr edit" | "label create") ;;
   *)
     echo "stub gh: unhandled $*" >&2
     exit 99

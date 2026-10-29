@@ -129,39 +129,61 @@ cannot safely start its own bare `v1` while one already exists.
 
 ## `dependabot-auto-merge`
 
-Reusable workflow: approves and auto-merges Dependabot PRs for patch and
-minor version updates once the **required** checks pass. Major-version
-bumps are left open for manual review, unless the dependency is in a
-trusted namespace or the caller opts in with `allow_major: true`.
+Reusable workflow: merges every Dependabot PR, patch, minor, major or
+grouped, once **every** check on the PR head has finished green. No human
+approves Dependabot updates (smartwatermelon/dev-env#229, decided
+2026-10-25). The risk of a compromised upstream release is accepted; the
+gate covers the other risk, a bump that breaks the build.
 
-"Required" means branch protection's list, not every check. `gh pr merge
---auto` waits only on required checks, and most fleet repos require only
-`standards-check`. On the patch/minor path, a red `build` that is not
-required does not stop the merge.
-
-### Opt-in: `allow_major`
-
-`allow_major: true` (default `false`) lets a **single-dependency** major
-bump merge without a human, under a stricter gate than the patch/minor
-path (smartwatermelon/dev-env#120):
+### The gate (v3)
 
 - The job waits until **every** check on the PR head SHA has finished,
   required or not, except this workflow's own. Any failed or cancelled
-  check leaves the PR for manual review. SKIPPED and NEUTRAL do not block.
+  check blocks the merge. SKIPPED and NEUTRAL do not block. "Required"
+  is not enough: most fleet repos require only `standards-check`, and a
+  red `build` that is not required would otherwise merge.
 - It then merges directly with `--match-head-commit`, not `--auto`, so a
   later Dependabot rebase cannot inherit an armed auto-merge.
-- It gives up with a `::notice::` (never a red check) after about 40
-  minutes, when the head moves, or when it cannot see its own check run.
-  The job's token has no `checks` permission; on a private repo the check
-  list may come back blank, and the self-visibility test turns that into
-  "manual review" instead of a false "all green".
-- Grouped PRs never take this path.
-- Pair it with a Dependabot `cooldown` so a major is some days old before
-  its PR opens. `semver-major-days` works only for ecosystems that support
-  SemVer (npm, pip, uv, and others); `github-actions` honors only
-  `default-days`. **Security updates ignore `cooldown`**, so with
-  `allow_major: true` a security-driven major can merge on day 0 once all
-  checks are green.
+- It waits up to 60 minutes. When the head moves, it stops and the run
+  for the new head decides. The job's token has no `checks` permission.
+  On a private repo the check list may come back blank. The
+  self-visibility test turns that into a block, not a false "all green".
+- The major/minor/group classification is logged, never used to decide.
+
+### Blocked PRs are labeled
+
+When the gate does not merge a PR, it adds `dependabot-blocked` and one
+reason label. It also removes any reason label left by an earlier run. Nothing
+fails red (#87). The Dependabot digest in `smartwatermelon/dev-env` reads
+these labels.
+
+| Label | Meaning |
+| --- | --- |
+| `dependabot-blocked:red-check` | A check failed on this PR and is not failing on the base branch. |
+| `dependabot-blocked:main-red` | Every failing check also fails on the base branch head. Fix `main`; the PR is probably fine. |
+| `dependabot-blocked:timeout` | Checks were still running after 60 minutes. |
+| `dependabot-blocked:no-checks` | No other check ran, or every other check was skipped. Add a required check such as `standards-check`. |
+| `dependabot-blocked:cannot-evaluate` | Empty `dependency-names`, an unreadable PR head or check list, or the run cannot see its own check run. |
+| `dependabot-blocked:merge-failed` | The gate passed but `gh pr merge` failed (head moved, approval missing, or branch protection). |
+
+A PR that later merges has its `dependabot-blocked` labels removed first.
+Creating and adding labels needs only `pull-requests: write`, which the
+caller already grants.
+
+### Cooldown
+
+Keep a short Dependabot `cooldown` (1 to 3 days) on version updates. It
+is the main guard against a compromised release. Such a release is
+usually pulled within hours to days. **Security updates ignore `cooldown`**, so a
+security fix still merges on day 0 once all checks are green.
+`semver-major-days` works only for ecosystems that support SemVer (npm,
+pip, uv, and others); `github-actions` honors only `default-days`.
+
+### Removed inputs
+
+`trusted_namespaces` and `allow_major` are ignored since v3. The run
+prints a notice when a caller passes them. They are still declared so v2
+callers do not fail with "unexpected input". They are removed in v4.
 
 ### Setup
 
@@ -185,9 +207,8 @@ permissions:
 
 jobs:
   # This caller stub is intentionally a thin delegate, not a full
-  # implementation. The version-comparison logic, the dependabot/actions
-  # always-trusted namespace defaults, and the actor-spoofing guard all
-  # live in the canonical workflow (smartwatermelon/github-workflows,
+  # implementation. The all-checks gate, the blocked labels, and the
+  # actor-spoofing guard all live in the canonical workflow (smartwatermelon/github-workflows,
   # this file) rather than here — a local diff that only shows this
   # stub shrinking will not show that logic; it moved, not disappeared.
   # See smartwatermelon/dev-env#20 for why: copy-pasting this workflow
@@ -196,19 +217,16 @@ jobs:
   # workflows here use a repo-wide semver tag convention (see
   # "Versioning" below), not per-action SHA pinning.
   dependabot-auto-merge:
-    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v2
-    with:
-      trusted_namespaces: 'smartwatermelon' # adjust to your own org; dependabot/actions are always trusted
-      # allow_major: true  # optional; see "Opt-in: allow_major" above
+    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v3
 ```
 
 Also add `can_approve_pull_request_reviews: true` to the repo's Actions
 workflow permissions (Settings → Actions → General → Workflow
-permissions), or run the fleet-wide fix in this repo's
-`README.md`/issue #87 history. Without it, `gh pr review --approve`
-fails; the workflow degrades to a visible `::warning::` instead of a
-silent stall, but auto-merge still won't proceed if the repo's branch
-protection requires an approval.
+permissions). The fleet-wide fix is in this repo's `README.md`/issue #87
+history. Without it, `gh pr review --approve` fails, and the workflow
+prints a visible `::warning::`. If branch protection requires an
+approval, the merge then fails and the PR is labeled
+`dependabot-blocked:merge-failed`.
 
 **Do NOT add `secrets: inherit` to the caller.** This workflow needs no
 secrets beyond the `GITHUB_TOKEN` it mints internally and declares no
@@ -229,11 +247,12 @@ reach for `secrets: inherit`.
 ### Security invariant: no `actions/checkout`
 
 This workflow uses `pull_request_target`, which runs with base-branch
-secrets available — the trigger implicated in several real supply-chain
-incidents (Ultralytics, nx, tj-actions) when combined with a checkout
-of PR-controlled code. This workflow is safe today because it never
-executes PR code: the only actions are API calls (`dependabot/fetch-metadata`,
-`gh pr review`, `gh pr merge`). **`actions/checkout` must never be added
+secrets available. That trigger is implicated in several real
+supply-chain incidents (Ultralytics, nx, tj-actions) when combined with a
+checkout of PR-controlled code. This workflow is safe today because it
+never executes PR code. Its only actions are API calls
+(`dependabot/fetch-metadata`, `gh pr review`, `gh pr merge`,
+`gh pr edit`, `gh label create`). **`actions/checkout` must never be added
 to this file.** The guardrail below enforces this (closes #64):
 
 - `self-review.yml`'s `guard-no-checkout` job greps this repo's own
@@ -259,15 +278,14 @@ so the namespace collision this prefix avoids is permanent.)
 
 ### Rollout discipline
 
-New tags of this workflow (and behavior-changing bumps) are pointed at
-from 2-3 low-traffic pilot repos first, pinned to the specific new tag
-(not a floating major). Let at least one real Dependabot PR flow
-through each pilot and confirm correct patch/minor-only behavior before
-repointing any floating tag fleet-wide. This workflow approves and
-merges PRs unattended with no fallback reviewer behind it — a
-bug here ships to every repo pinned to the affected tag at once, so it
-gets the same pilot-then-fleet discipline as the org-level rollout
-work.
+New tags of this workflow, and behavior-changing bumps, go first to 2-3
+low-traffic pilot repos. Each pilot pins the specific new tag, not a
+floating major. Let at least one real Dependabot PR flow through each
+pilot. Confirm the expected merge or label before moving callers to the
+new tag. This workflow approves and merges PRs unattended, with no
+fallback reviewer behind it. A bug here ships to every repo pinned to
+the affected tag at once. So it gets the same pilot-then-fleet
+discipline as the org-level rollout work.
 
 ---
 

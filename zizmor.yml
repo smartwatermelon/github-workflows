@@ -117,6 +117,8 @@ rules:
   # YAMLLINT_VERSION), and the three binary downloads next to them are
   # additionally SHA256-verified. A lockfile would add a second place for the
   # version to drift without removing the install.
+  # self-review.yml's tests job installs the same pins.
   adhoc-packages:
     ignore:
       - standards-check.yml
+      - self-review.yml

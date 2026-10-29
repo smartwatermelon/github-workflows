@@ -60,3 +60,52 @@ jobs:
 
       - name: Compare with dotfiles markdownlint-cli/.markdownlint.json
         run: bash tests/test-markdownlint-drift.sh
+
+  tests:
+    # Every tests/test-*.sh, so a change to a reusable workflow is tested before its tag moves.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Same pins as standards-check.yml; change both together.
+    env:
+      SHELLCHECK_VERSION: "0.11.0"
+      SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+      ZIZMOR_VERSION: "1.30.0"
+      ZIZMOR_SHA256: "ec8c95cd800845abb9bbc5f377ec7c57d2eb8e2386a00a201d3a74ee4092e5ed"
+      YAMLLINT_VERSION: "1.38.0"
+      MARKDOWNLINT_CLI2_VERSION: "0.23.2"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install pinned linters
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin"; echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+          curl -Lfso /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "${HOME}/.local/bin/shellcheck"
+          curl -Lfso /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          install -m 0755 /tmp/actionlint "${HOME}/.local/bin/actionlint"
+          curl -Lfso /tmp/zizmor.tar.gz \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZIZMOR_SHA256}  /tmp/zizmor.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/zizmor && tar -xzf /tmp/zizmor.tar.gz -C /tmp/zizmor
+          install -m 0755 "$(find /tmp/zizmor -type f -name zizmor | head -1)" "${HOME}/.local/bin/zizmor"
+          pipx install "yamllint==${YAMLLINT_VERSION}"
+          npm install -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}"
+          # yq and jq come with the runner image.
+          yq --version && jq --version
+
+      - name: Run the test suite
+        run: bash tests/run-tests.sh

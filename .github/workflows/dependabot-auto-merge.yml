@@ -53,6 +53,8 @@ name: Dependabot Auto-Merge
 #   jobs:
 #     dependabot-auto-merge:
 #       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v3
+#       with:
+#         sanity_checks: 'tests'  # checks that build or run the code; lint is not enough
 #
 # Do NOT add a `secrets:` block to the caller (see above).
 #
@@ -68,6 +70,16 @@ name: Dependabot Auto-Merge
 on:
   workflow_call:
     inputs:
+      sanity_checks:
+        description: >-
+          Comma-separated check names, as `gh pr checks` shows them, that
+          build or run the code (for example 'tests' or 'build'). Each must
+          run and pass before a merge; a matrix job 'test (3.12)' matches
+          'test'. Empty: nothing merges, and the PR is labeled
+          dependabot-blocked:no-sanity-check.
+        type: string
+        required: false
+        default: ''
       trusted_namespaces:
         description: >-
           Ignored since v3: every dependency goes through the same gate.
@@ -141,6 +153,7 @@ jobs:
           PREV_VERSION: ${{ steps.metadata.outputs.previous-version }}
           NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
           DEP_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          SANITY_CHECKS: ${{ inputs.sanity_checks }}
           TRUSTED_NAMESPACES: ${{ inputs.trusted_namespaces }}
           ALLOW_MAJOR: ${{ inputs.allow_major }}
         run: |
@@ -158,6 +171,13 @@ jobs:
             echo "decision=blocked" >> "$GITHUB_OUTPUT"
             echo "reason=cannot-evaluate" >> "$GITHUB_OUTPUT"
             echo "::notice::Not merged: empty dependency-names ($PREV_VERSION -> $NEW_VERSION)"
+            exit 0
+          fi
+          # Lint alone never proves the code still works (dev-env#229).
+          if [ -z "$(printf '%s' "${SANITY_CHECKS:-}" | tr -d ',[:space:]')" ]; then
+            echo "decision=blocked" >> "$GITHUB_OUTPUT"
+            echo "reason=no-sanity-check" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not merged: the caller names no sanity_checks (a check that builds or runs the code)"
             exit 0
           fi
           if [ -n "${TRUSTED_NAMESPACES:-}" ] || [ "${ALLOW_MAJOR:-false}" = "true" ]; then
@@ -190,6 +210,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           RUN_ID: ${{ github.run_id }}
           SELF_WORKFLOW: ${{ github.workflow }}
+          SANITY_CHECKS: ${{ inputs.sanity_checks }}
           SETTLE_SECONDS: '120'
           POLL_SECONDS: '30'
           WAIT_SECONDS: '3600'
@@ -211,15 +232,22 @@ jobs:
               | select(.state == "failure" or .state == "error") | .context') || return 1
             printf '%s\n%s\n' "$runs" "$statuses"
           }
+          sanity=$(printf '%s' "$SANITY_CHECKS" \
+            | jq -Rsc '[splits("[,\n]")] | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
           deadline=$(( $(date +%s) + WAIT_SECONDS ))
           # Netlify checks register late: settle, then need two identical finished polls.
           sleep "$SETTLE_SECONDS"
           last=""
           others=""
+          pending=""
+          missing=""
           while :; do
             if [ "$(date +%s)" -ge "$deadline" ]; then
               if [ "$others" = "0" ]; then
                 stop blocked no-checks "only this workflow's checks ran; add a required check such as standards-check"
+              fi
+              if [ "$pending" = "0" ] && [ -n "$missing" ]; then
+                stop blocked no-sanity-check "sanity checks never passed: ${missing//$'\037'/, }"
               fi
               stop blocked timeout "checks still running after $(( WAIT_SECONDS / 60 )) min"
             fi
@@ -233,10 +261,10 @@ jobs:
             fi
             # Exits nonzero while pending/failing; judge the JSON.
             json=$(gh pr checks "$PR_URL" --json name,workflow,bucket,link 2>/dev/null || true)
-            # bad_names is last: read collapses empty tab fields. Unknown buckets count as pending.
+            # read collapses empty tab fields, so the two name lists carry an m:/b: prefix.
             # Names are joined with \u001f because job names can contain ", ".
             if ! summary=$(printf '%s' "$json" | jq -er \
-                --arg run "/actions/runs/${RUN_ID}/" --arg wf "$SELF_WORKFLOW" '
+                --arg run "/actions/runs/${RUN_ID}/" --arg wf "$SELF_WORKFLOW" --argjson sanity "$sanity" '
                 if type != "array" then error("not an array") else . end
                 | (map(select((.link // "") | contains($run))) | length) as $self
                 | map(select(((.link // "") | contains($run)) | not)
@@ -250,11 +278,17 @@ jobs:
                     ($bad | length),
                     ($o | map(select(.bucket == "pass")) | length),
                     ($o | map("\(.name)=\(.bucket)") | sort | join("|")),
-                    ($bad | map(.name) | join("\u001f")) ]
+                    ("m:" + ($sanity | map(. as $s | select(
+                        [$o[] | select(.bucket == "pass"
+                          and (.name == $s or (.name | startswith($s + " ("))))] | length == 0))
+                      | join("\u001f"))),
+                    ("b:" + ($bad | map(.name) | join("\u001f"))) ]
                 | @tsv'); then
               stop blocked cannot-evaluate "could not read the PR's checks"
             fi
-            IFS=$'\t' read -r self others pending bad passed sig bad_names <<< "$summary"
+            IFS=$'\t' read -r self others pending bad passed sig missing bad_names <<< "$summary"
+            missing="${missing#m:}"
+            bad_names="${bad_names#b:}"
             if [ "$self" -eq 0 ]; then
               # No checks: read; seeing itself proves the list is not a permission blank.
               stop blocked cannot-evaluate "this run cannot see its own check run (no checks: read on a private repo?)"
@@ -276,6 +310,12 @@ jobs:
               if [ "$sig" = "$last" ]; then
                 if [ "$passed" -eq 0 ]; then
                   stop blocked no-checks "all $others other checks were skipped; nothing proved this head works"
+                fi
+                if [ -n "$missing" ]; then
+                  # A late check may still register: keep polling until the deadline.
+                  last=""
+                  sleep "$POLL_SECONDS"
+                  continue
                 fi
                 echo "gate=pass" >> "$GITHUB_OUTPUT"
                 echo "::notice::All $others other checks finished with no failure on $HEAD_SHA"
@@ -325,7 +365,7 @@ jobs:
         run: |
           set -uo pipefail
           case "${REASON:-}" in
-            red-check|main-red|timeout|no-checks|cannot-evaluate|merge-failed) ;;
+            red-check|main-red|timeout|no-checks|no-sanity-check|cannot-evaluate|merge-failed) ;;
             *) REASON=cannot-evaluate ;;
           esac
           want="dependabot-blocked:${REASON}"

@@ -38,6 +38,7 @@ policy() {
   _fixture
   rc=0
   out="$(PREV_VERSION="$1" NEW_VERSION="$2" DEP_NAMES="$3" ALLOW_MAJOR="${4-false}" \
+    SANITY_CHECKS="${SANITY-tests}" \
     TRUSTED_NAMESPACES="${5-}" GITHUB_OUTPUT="${STUB_DIR}/out" \
     bash -c "${policy_sh}" 2>&1)" || rc=$?
   decision="$(_out decision)"; reason="$(_out reason)"
@@ -65,6 +66,11 @@ _expect_policy "empty dependency-names -> blocked" blocked "empty dependency-nam
 if [[ "${reason}" == "cannot-evaluate" ]]; then _ok "empty deps reason is cannot-evaluate"; else _bad "empty deps reason='${reason}'"; fi
 policy 1.0.0 2.0.0 "  "
 _expect_policy "whitespace-only dependency-names -> blocked" blocked
+SANITY="" policy 5.9.3 5.10.0 typescript
+_expect_policy "no sanity_checks -> blocked before any wait" blocked "names no sanity_checks"
+if [[ "${reason}" == "no-sanity-check" ]]; then _ok "reason is no-sanity-check"; else _bad "reason='${reason}'"; fi
+SANITY=" , " policy 5.9.3 5.10.0 typescript
+_expect_policy "blank sanity_checks entries -> blocked" blocked "names no sanity_checks"
 
 # --- gate step ---------------------------------------------------------
 sha="0123456789abcdef0123456789abcdef01234567"
@@ -93,7 +99,7 @@ gate() {
   rc=0
   out="$(PATH="${here}/stub-dependabot:${PATH}" GITHUB_OUTPUT="${STUB_DIR}/out" \
     PR_URL=https://github.com/acme/site/pull/7 HEAD_SHA="${sha}" RUN_ID="${run_id}" \
-    REPO=acme/site BASE_REF=main \
+    REPO=acme/site BASE_REF=main SANITY_CHECKS="${SANITY-build}" \
     SELF_WORKFLOW="Dependabot Auto-Merge" SETTLE_SECONDS=0 POLL_SECONDS=0.1 \
     WAIT_SECONDS="${WAIT:-3}" bash -c "${gate_sh}" 2>&1)" || rc=$?
   result="$(_out gate)"; reason="$(_out reason)"
@@ -200,6 +206,37 @@ _checks 1 self "build|skipping" "deploy|skipping"
 WAIT=30 gate
 _expect_gate "all other checks skipped -> no-checks" blocked no-checks "all 2 other checks were skipped"
 
+# 15. matrix job name matches its sanity entry
+_fixture; echo "${sha}" >"${STUB_DIR}/head"
+_checks 1 self "test (3.11)|pass" "test (3.12)|pass" "standards|pass"
+SANITY="test" gate
+_expect_gate "matrix 'test (3.12)' satisfies sanity 'test'" pass "" "All 3 other checks"
+
+# 16. all green, but the named sanity check never ran -> no-sanity-check at the deadline
+_fixture; echo "${sha}" >"${STUB_DIR}/head"
+_checks 1 self "standards|pass"
+SANITY="build, tests" WAIT=1 gate
+_expect_gate "sanity checks missing -> no-sanity-check" blocked no-sanity-check "sanity checks never passed: build, tests"
+
+# 17. sanity check skipped -> it never passed
+_fixture; echo "${sha}" >"${STUB_DIR}/head"
+_checks 1 self "build|skipping" "standards|pass"
+WAIT=1 gate
+_expect_gate "skipped sanity check -> no-sanity-check" blocked no-sanity-check "build"
+
+# 18. sanity check registers late -> keeps polling, then passes
+_fixture; echo "${sha}" >"${STUB_DIR}/head"
+_checks 1 self "standards|pass"
+_checks 3 self "standards|pass" "build|pass"
+WAIT=5 gate
+_expect_gate "late sanity check -> pass" pass "" "All 2 other checks"
+
+# 19. a prefix that is not a matrix suffix does not match
+_fixture; echo "${sha}" >"${STUB_DIR}/head"
+_checks 1 self "build-docs|pass"
+WAIT=1 gate
+_expect_gate "'build-docs' does not satisfy 'build'" blocked no-sanity-check "build"
+
 # --- merge step --------------------------------------------------------
 merge() {
   rc=0
@@ -244,6 +281,14 @@ if [[ "${rc}" -eq 0 ]] && _called "label create dependabot-blocked:red-check" \
   _ok "labels the reason and drops the stale reason"
 else
   _bad "label: rc=${rc} calls=$(<"${STUB_DIR}/calls.log")"
+fi
+
+_fixture
+label no-sanity-check
+if _called "--add-label dependabot-blocked,dependabot-blocked:no-sanity-check"; then
+  _ok "no-sanity-check is a known reason"
+else
+  _bad "no-sanity-check label: $(<"${STUB_DIR}/calls.log")"
 fi
 
 _fixture

@@ -150,6 +150,19 @@ gate covers the other risk, a bump that breaks the build.
   self-visibility test turns that into a block, not a false "all green".
 - The major/minor/group classification is logged, never used to decide.
 
+### Sanity checks (required)
+
+A green lint check proves nothing about whether the code still works.
+Each caller names its sanity checks in `sanity_checks`: the checks that
+build or run the code, such as `tests` or `build`. The gate merges only
+when every named check ran and passed. A matrix job such as
+`test (3.12)` matches the entry `test`. With no entry, nothing merges and
+the PR is labeled `dependabot-blocked:no-sanity-check`.
+
+A repo with no code to build (`.github`, `repo-template`) names
+`standards-check / run-standards-check`, as a documented exception
+(smartwatermelon/dev-env#229).
+
 ### Blocked PRs are labeled
 
 When the gate does not merge a PR, it adds `dependabot-blocked` and one
@@ -162,6 +175,7 @@ these labels.
 | `dependabot-blocked:red-check` | A check failed on this PR and is not failing on the base branch. |
 | `dependabot-blocked:main-red` | Every failing check also fails on the base branch head. Fix `main`; the PR is probably fine. |
 | `dependabot-blocked:timeout` | Checks were still running after 60 minutes. |
+| `dependabot-blocked:no-sanity-check` | The caller names no `sanity_checks`, or a named check never ran or never passed. |
 | `dependabot-blocked:no-checks` | No other check ran, or every other check was skipped. Add a required check such as `standards-check`. |
 | `dependabot-blocked:cannot-evaluate` | Empty `dependency-names`, an unreadable PR head or check list, or the run cannot see its own check run. |
 | `dependabot-blocked:merge-failed` | The gate passed but `gh pr merge` failed (head moved, approval missing, or branch protection). |
@@ -218,6 +232,8 @@ jobs:
   # "Versioning" below), not per-action SHA pinning.
   dependabot-auto-merge:
     uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v3
+    with:
+      sanity_checks: 'tests' # checks that build or run the code; see "Sanity checks"
 ```
 
 Also add `can_approve_pull_request_reviews: true` to the repo's Actions

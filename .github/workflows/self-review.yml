@@ -60,3 +60,18 @@ jobs:
 
       - name: Compare with dotfiles markdownlint-cli/.markdownlint.json
         run: bash tests/test-markdownlint-drift.sh
+
+  tests:
+    # Every tests/test-*.sh, so a change to a reusable workflow is tested before its tag moves.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run the test suite
+        run: bash tests/run-tests.sh

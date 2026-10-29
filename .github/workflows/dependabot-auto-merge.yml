@@ -24,19 +24,7 @@ name: Dependabot Auto-Merge
 # invariant is also enforced by a CI guardrail — see self-review.yml's
 # `guard-no-checkout` job in this repo. Closes #64.
 #
-# Callers MUST NOT use `secrets: inherit`. This workflow needs no
-# secrets beyond the ambient `GITHUB_TOKEN` it mints itself — it does
-# not declare a `secrets:` block below and none should be added for
-# convenience. `secrets: inherit` on a caller hands every repo secret
-# (CLAUDE_CODE_OAUTH_TOKEN, deploy keys, etc.) to a job that evaluates
-# `pull_request_target` on externally-authored PR content. The
-# no-checkout property above doesn't protect against that leak — it
-# only means the leak, if it ever happened, wouldn't arrive bundled
-# with an obvious code-execution vector. Splitting this file out of
-# each caller repo makes `secrets: inherit` look like a tempting
-# one-line fix the next time someone hits an auth error here; it is
-# not a fix, it is a new secret-leak vector this split must not
-# introduce. Caller stubs should declare no `secrets:` block at all.
+# Callers pass MERGE_APP_CLIENT_ID and MERGE_APP_PRIVATE_KEY by name, never `secrets: inherit` (see README).
 #
 # `gh pr review --approve` satisfies branch-protection rules that
 # require review; it's a no-op on repos where no approving review is
@@ -55,8 +43,11 @@ name: Dependabot Auto-Merge
 #       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v3
 #       with:
 #         sanity_checks: 'tests'  # checks that build or run the code; lint is not enough
+#       secrets:
+#         MERGE_APP_CLIENT_ID: ${{ secrets.MERGE_APP_CLIENT_ID }}
+#         MERGE_APP_PRIVATE_KEY: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
 #
-# Do NOT add a `secrets:` block to the caller (see above).
+# Never `secrets: inherit` (see above).
 #
 # Versioning: this file uses a prefixed tag namespace
 # (dependabot-auto-merge-v1, dependabot-auto-merge-v2, ...) rather
@@ -65,7 +56,7 @@ name: Dependabot Auto-Merge
 # second, unrelated file cannot safely "start its own v1" in the same
 # repo-wide tag namespace.
 #
-# v3 (this version): every PR merges through the all-checks gate, and blocked PRs are labeled.
+# v3: all-checks gate and blocked labels. v3.1 (this version): merges as an App, so push runs start on main.
 
 on:
   workflow_call:
@@ -96,6 +87,15 @@ on:
         type: boolean
         required: false
         default: false
+    secrets:
+      # Not required, so a caller without them still runs: its PRs are
+      # labeled dependabot-blocked:merge-failed instead of a red run (#87).
+      MERGE_APP_CLIENT_ID:
+        description: Client ID of the dependabot-merge-swm App.
+        required: false
+      MERGE_APP_PRIVATE_KEY:
+        description: Private key of the dependabot-merge-swm App.
+        required: false
 
 permissions:
   contents: write
@@ -328,11 +328,28 @@ jobs:
             sleep "$POLL_SECONDS"
           done
 
+      # Minted after the gate passes, for this repo only. A failure labels merge-failed, never red (#87).
+      - name: Mint merge App token
+        id: app-token
+        if: steps.gate.outputs.gate == 'pass'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.MERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          # Most Dependabot PRs here change .github/workflows/.
+          permission-workflows: write
+
       - name: Approve and merge
         id: merge
         if: steps.gate.outputs.gate == 'pass'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -346,8 +363,16 @@ jobs:
             gh pr edit "$PR_URL" --remove-label "$stale" >/dev/null \
               || echo "::warning::Could not remove labels: $stale"
           fi
+          # No GITHUB_TOKEN fallback: its merge starts no push workflows on main.
+          if [ -z "${APP_TOKEN:-}" ]; then
+            echo "reason=merge-failed" >> "$GITHUB_OUTPUT"
+            echo "::warning::No merge App token. Pass MERGE_APP_CLIENT_ID and MERGE_APP_PRIVATE_KEY," \
+              "and install the dependabot-merge-swm App on this repository."
+            exit 0
+          fi
           # Not --auto: it survives a rebase and then waits on required checks only.
-          if ! gh pr merge --squash --delete-branch --match-head-commit "$HEAD_SHA" "$PR_URL"; then
+          if ! GH_TOKEN="$APP_TOKEN" gh pr merge --squash --delete-branch \
+              --match-head-commit "$HEAD_SHA" "$PR_URL"; then
             echo "reason=merge-failed" >> "$GITHUB_OUTPUT"
             echo "::warning::Merge failed — head moved, approval missing, or branch protection blocked it."
           fi

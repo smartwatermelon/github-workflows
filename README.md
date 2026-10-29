@@ -144,6 +144,14 @@ gate covers the other risk, a bump that breaks the build.
   red `build` that is not required would otherwise merge.
 - It then merges directly with `--match-head-commit`, not `--auto`, so a
   later Dependabot rebase cannot inherit an armed auto-merge.
+- Since v3.1 the merge runs as the `dependabot-merge-swm` GitHub App. A
+  merge made with `GITHUB_TOKEN` starts no `push` workflows, so nothing
+  checked `main` after a gate merge (smartwatermelon/dev-env#229). The App
+  token is minted only after the gate passes, covers only the current
+  repository, and is used only for `gh pr merge`. Without it the PR is
+  labeled `dependabot-blocked:merge-failed`; there is no `GITHUB_TOKEN`
+  fallback. Credentials: `docs/runbooks/dependabot-merge-app.md` in
+  `smartwatermelon/dev-env`.
 - It waits up to 60 minutes. When the head moves, it stops and the run
   for the new head decides. The job's token has no `checks` permission.
   On a private repo the check list may come back blank. The
@@ -178,7 +186,7 @@ these labels.
 | `dependabot-blocked:no-sanity-check` | The caller names no `sanity_checks`, or a named check never ran or never passed. |
 | `dependabot-blocked:no-checks` | No other check ran, or every other check was skipped. Add a required check such as `standards-check`. |
 | `dependabot-blocked:cannot-evaluate` | Empty `dependency-names`, an unreadable PR head or check list, or the run cannot see its own check run. |
-| `dependabot-blocked:merge-failed` | The gate passed but `gh pr merge` failed (head moved, approval missing, or branch protection). |
+| `dependabot-blocked:merge-failed` | The gate passed but the merge did not happen: no merge App token, or `gh pr merge` failed (head moved, approval missing, or branch protection). |
 
 A PR that later merges has its `dependabot-blocked` labels removed first.
 Creating and adding labels needs only `pull-requests: write`, which the
@@ -234,7 +242,13 @@ jobs:
     uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v3
     with:
       sanity_checks: 'tests' # checks that build or run the code; see "Sanity checks"
+    secrets: # these two by name; never `secrets: inherit`
+      MERGE_APP_CLIENT_ID: ${{ secrets.MERGE_APP_CLIENT_ID }}
+      MERGE_APP_PRIVATE_KEY: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
 ```
+
+The two secrets are organization secrets with selected visibility. Add a
+new caller repository to both secrets and to the App's installation.
 
 Also add `can_approve_pull_request_reviews: true` to the repo's Actions
 workflow permissions (Settings → Actions → General → Workflow
@@ -244,20 +258,17 @@ prints a visible `::warning::`. If branch protection requires an
 approval, the merge then fails and the PR is labeled
 `dependabot-blocked:merge-failed`.
 
-**Do NOT add `secrets: inherit` to the caller.** This workflow needs no
-secrets beyond the `GITHUB_TOKEN` it mints internally and declares no
-`secrets:` input. Splitting this workflow out of each caller repo (so
-that fixing a bug means editing one file, not 26+) creates a real
-temptation: a future maintainer who hits an auth-shaped failure here
-has an easy one-line "fix" available in `secrets: inherit`. That line
-would hand every repo secret — `CLAUDE_CODE_OAUTH_TOKEN`, deploy keys,
-anything else the repo holds — to a job that runs against
-externally-authored PR content under `pull_request_target`. The
-workflow's no-checkout property (see below) does not protect against
-this: it only means a secret leak, if it happened, wouldn't arrive
-bundled with an obvious code-execution vector. If `gh pr review` or
-`gh pr merge` is failing for a reason unrelated to
-`can_approve_pull_request_reviews`, debug the actual cause — don't
+**Do NOT add `secrets: inherit` to the caller.** This workflow takes
+exactly two secrets, `MERGE_APP_CLIENT_ID` and `MERGE_APP_PRIVATE_KEY`,
+passed by name. One shared workflow for 26+ callers makes
+`secrets: inherit` a tempting one-line "fix" for an auth-shaped failure.
+That line would hand every repo secret to a job that runs on
+externally-authored PR content under `pull_request_target`. That
+includes `CLAUDE_CODE_OAUTH_TOKEN`, deploy keys and anything else the
+repo holds. The no-checkout property (see below) does not prevent this.
+It only means a leak would not arrive with an obvious code-execution
+vector. If `gh pr review` or `gh pr merge` fails for a reason unrelated
+to `can_approve_pull_request_reviews`, debug the actual cause. Do not
 reach for `secrets: inherit`.
 
 ### Security invariant: no `actions/checkout`
@@ -266,9 +277,10 @@ This workflow uses `pull_request_target`, which runs with base-branch
 secrets available. That trigger is implicated in several real
 supply-chain incidents (Ultralytics, nx, tj-actions) when combined with a
 checkout of PR-controlled code. This workflow is safe today because it
-never executes PR code. Its only actions are API calls
-(`dependabot/fetch-metadata`, `gh pr review`, `gh pr merge`,
-`gh pr edit`, `gh label create`). **`actions/checkout` must never be added
+never executes PR code. Its only actions are API calls. Two are
+actions: `dependabot/fetch-metadata` and `actions/create-github-app-token`.
+The rest are `gh` commands: `pr review`, `pr merge`, `pr edit` and
+`label create`. **`actions/checkout` must never be added
 to this file.** The guardrail below enforces this (closes #64):
 
 - `self-review.yml`'s `guard-no-checkout` job greps this repo's own

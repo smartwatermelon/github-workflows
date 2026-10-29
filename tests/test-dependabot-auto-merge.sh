@@ -237,6 +237,12 @@ _checks 1 self "build-docs|pass"
 WAIT=1 gate
 _expect_gate "'build-docs' does not satisfy 'build'" blocked no-sanity-check "build"
 
+# 20. a multi-line sanity_checks (YAML block scalar) splits on newlines too
+_fixture; echo "${sha}" >"${STUB_DIR}/head"
+_checks 1 self "build|pass" "tests|pass"
+SANITY=$'build\ntests\n' gate
+_expect_gate "multi-line sanity_checks -> pass" pass "" "All 2 other checks"
+
 # --- merge step --------------------------------------------------------
 merge() {
   rc=0

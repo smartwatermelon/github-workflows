@@ -289,7 +289,7 @@ to this file.** The guardrail below enforces this (closes #64):
   `actions/checkout` appears.
 
 This repo auto-merges its own Dependabot PRs through
-`self-dependabot-auto-merge.yml`. It pins `@dependabot-auto-merge-v2`
+`self-dependabot-auto-merge.yml`. It pins `@dependabot-auto-merge-v3.1.0`
 rather than a local path, so an unreleased change to the reusable
 workflow never decides merges here.
 

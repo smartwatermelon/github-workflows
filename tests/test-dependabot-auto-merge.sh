@@ -66,6 +66,27 @@ _expect_policy "empty dependency-names -> blocked" blocked "empty dependency-nam
 if [[ "${reason}" == "cannot-evaluate" ]]; then _ok "empty deps reason is cannot-evaluate"; else _bad "empty deps reason='${reason}'"; fi
 policy 1.0.0 2.0.0 "  "
 _expect_policy "whitespace-only dependency-names -> blocked" blocked
+# Downgrades never merge (2026-10-31: v3.1.0 -> 2.1.0 across the fleet).
+policy 3.1.0 2.1.0 typescript
+_expect_policy "single downgrade -> blocked" blocked "downgrade"
+if [[ "${reason}" == "downgrade" ]]; then _ok "downgrade reason is downgrade"; else _bad "downgrade reason='${reason}'"; fi
+policy dependabot-auto-merge-v3.1.0 dependabot-auto-merge-v2.1.0 smartwatermelon/thing.yml
+_expect_policy "prefixed tag downgrade -> blocked" blocked "downgrade"
+policy v1.10.0 v1.9.4 actions/thing
+_expect_policy "1.10 -> 1.9 is a downgrade (not string order)" blocked "downgrade"
+policy 1.9.4 1.10.0 actions/thing
+_expect_policy "1.9 -> 1.10 is an upgrade" gate "patch/minor within v1"
+policy 2.0 2.0.0 actions/thing
+_expect_policy "2.0 -> 2.0.0 is not a downgrade" gate
+policy 1.2.3-beta.1 1.2.3 actions/thing
+_expect_policy "prerelease -> release of same core is not a downgrade" gate
+policy "" 2.1.0 smartwatermelon/thing.yml
+_expect_policy "empty previous-version on a single update -> blocked" blocked "previous version unknown"
+if [[ "${reason}" == "cannot-evaluate" ]]; then _ok "unknown previous reason is cannot-evaluate"; else _bad "unknown previous reason='${reason}'"; fi
+policy "" 2.1.0 "a, b"
+_expect_policy "empty previous-version on a group -> gate" gate "group of 2"
+SANITY="" policy 2.1.0 1.0.0 typescript
+_expect_policy "downgrade is reported before a missing sanity check" blocked "downgrade"
 SANITY="" policy 5.9.3 5.10.0 typescript
 _expect_policy "no sanity_checks -> blocked before any wait" blocked "names no sanity_checks"
 if [[ "${reason}" == "no-sanity-check" ]]; then _ok "reason is no-sanity-check"; else _bad "reason='${reason}'"; fi
@@ -315,6 +336,14 @@ if _called "--add-label dependabot-blocked,dependabot-blocked:no-sanity-check"; 
   _ok "no-sanity-check is a known reason"
 else
   _bad "no-sanity-check label: $(<"${STUB_DIR}/calls.log")"
+fi
+
+_fixture
+label downgrade
+if _called "--add-label dependabot-blocked,dependabot-blocked:downgrade"; then
+  _ok "downgrade is a known reason"
+else
+  _bad "downgrade label: $(<"${STUB_DIR}/calls.log")"
 fi
 
 _fixture

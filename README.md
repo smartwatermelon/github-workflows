@@ -157,6 +157,8 @@ gate covers the other risk, a bump that breaks the build.
   On a private repo the check list may come back blank. The
   self-visibility test turns that into a block, not a false "all green".
 - The major/minor/group classification is logged, never used to decide.
+  The one exception is a downgrade: a single update to a lower version,
+  or one whose previous version is unknown, is never merged.
 
 ### Sanity checks (required)
 
@@ -185,7 +187,8 @@ these labels.
 | `dependabot-blocked:timeout` | Checks were still running after 60 minutes. |
 | `dependabot-blocked:no-sanity-check` | The caller names no `sanity_checks`, or a named check never ran or never passed. |
 | `dependabot-blocked:no-checks` | No other check ran, or every other check was skipped. Add a required check such as `standards-check`. |
-| `dependabot-blocked:cannot-evaluate` | Empty `dependency-names`, an unreadable PR head or check list, or the run cannot see its own check run. |
+| `dependabot-blocked:downgrade` | The PR moves a dependency to a lower version. Close it. |
+| `dependabot-blocked:cannot-evaluate` | Empty `dependency-names`, an unknown previous version on a single update, an unreadable PR head or check list, or the run cannot see its own check run. |
 | `dependabot-blocked:merge-failed` | The gate passed but the merge did not happen: no merge App token, or `gh pr merge` failed (head moved, approval missing, or branch protection). |
 
 A PR that later merges has its `dependabot-blocked` labels removed first.

@@ -56,7 +56,8 @@ name: Dependabot Auto-Merge
 # second, unrelated file cannot safely "start its own v1" in the same
 # repo-wide tag namespace.
 #
-# v3: all-checks gate and blocked labels. v3.1 (this version): merges as an App, so push runs start on main.
+# v3: all-checks gate and blocked labels. v3.1: merges as an App, so push runs start on main.
+# v3.2 (this version): never merges a downgrade, or a single update with no previous version.
 
 on:
   workflow_call:
@@ -172,6 +173,34 @@ jobs:
             echo "reason=cannot-evaluate" >> "$GITHUB_OUTPUT"
             echo "::notice::Not merged: empty dependency-names ($PREV_VERSION -> $NEW_VERSION)"
             exit 0
+          fi
+          # Never merge a downgrade. On 2026-10-31 Dependabot opened
+          # "dependabot-auto-merge-v3.1.0 -> 2.1.0" across the fleet, and
+          # fetch-metadata gave an empty previous-version for it. So for a
+          # single update, an unknown previous version blocks too: the run
+          # cannot rule out a downgrade. A group is not compared here.
+          core_version() { # 1.2.0, v1.2, name-v1.2, 1.2-beta.1 -> 1.2; empty if none
+            local re='^([A-Za-z][A-Za-z0-9_-]*[-_/])?[vV]?([0-9]+(\.[0-9]+)*)([-+][0-9A-Za-z.-]*)?$'
+            if [[ "$1" =~ $re ]]; then
+              printf '%s' "${BASH_REMATCH[2]}" | sed -E 's@(\.0+)+$@@'
+            fi
+          }
+          if [ "$dep_count" -eq 1 ]; then
+            if [ -z "$(printf '%s' "${PREV_VERSION:-}" | tr -d '[:space:]')" ]; then
+              echo "decision=blocked" >> "$GITHUB_OUTPUT"
+              echo "reason=cannot-evaluate" >> "$GITHUB_OUTPUT"
+              echo "::notice::Not merged: previous version unknown ($DEP_NAMES -> $NEW_VERSION); cannot rule out a downgrade"
+              exit 0
+            fi
+            prev_core=$(core_version "$PREV_VERSION")
+            new_core=$(core_version "$NEW_VERSION")
+            if [ -n "$prev_core" ] && [ -n "$new_core" ] && [ "$prev_core" != "$new_core" ] \
+                && [ "$(printf '%s\n%s\n' "$prev_core" "$new_core" | sort -V | head -n 1)" = "$new_core" ]; then
+              echo "decision=blocked" >> "$GITHUB_OUTPUT"
+              echo "reason=downgrade" >> "$GITHUB_OUTPUT"
+              echo "::notice::Not merged: downgrade ($DEP_NAMES: $PREV_VERSION -> $NEW_VERSION)"
+              exit 0
+            fi
           fi
           # Lint alone never proves the code still works (dev-env#229).
           if [ -z "$(printf '%s' "${SANITY_CHECKS:-}" | tr -d ',[:space:]')" ]; then
@@ -390,7 +419,7 @@ jobs:
         run: |
           set -uo pipefail
           case "${REASON:-}" in
-            red-check|main-red|timeout|no-checks|no-sanity-check|cannot-evaluate|merge-failed) ;;
+            red-check|main-red|timeout|no-checks|no-sanity-check|cannot-evaluate|merge-failed|downgrade) ;;
             *) REASON=cannot-evaluate ;;
           esac
           want="dependabot-blocked:${REASON}"

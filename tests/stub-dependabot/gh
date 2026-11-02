@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stub gh: pr view prints head (or labels); pr checks prints checks.<n>.json
 # (last repeats) and exits 8 while pending, like gh. api prints the base
-# branch's failing names from main-runs / main-statuses (already --jq-filtered).
+# branch's failing names from main-runs / main-statuses (already --jq-filtered),
+# and the PR files API body from files.json.
 # A file fail.<cmd>[-<sub>] in STUB_DIR (fail.api, fail.pr-merge) makes it exit 1.
 # Each call is logged with the GH_TOKEN it ran under.
 set -euo pipefail
@@ -35,6 +36,9 @@ case "$1 ${2:-}" in
     ;;
   "api "*/status)
     cat "${STUB_DIR}/main-statuses" 2>/dev/null || true
+    ;;
+  "api "*/pulls/*/files)
+    cat "${STUB_DIR}/files.json"
     ;;
   "pr review" | "pr merge" | "pr edit" | "label create") ;;
   *)

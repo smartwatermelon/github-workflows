@@ -33,12 +33,47 @@ _out() { sed -n "s/^$1=//p" "${STUB_DIR}/out"; }
 _called() { grep -qF -- "$1" "${STUB_DIR}/calls.log"; }
 
 # --- policy step -------------------------------------------------------
-# policy PREV NEW DEPS [ALLOW] [TRUSTED] -> sets decision, reason, out
+# _dep NAME PREV NEW: one updated-dependencies-json entry, as fetch-metadata writes it.
+_dep() { jq -cn --arg n "$1" --arg p "$2" --arg v "$3" '{dependencyName: $n, prevVersion: $p, newVersion: $v}'; }
+# _file NAME PATCH: one entry of the PR files API. PATCH "-" means no patch (too large).
+_file() {
+  if [[ "$2" == "-" ]]; then jq -cn --arg f "$1" '{filename: $f}'; return; fi
+  jq -cn --arg f "$1" --arg p "$2" '{filename: $f, patch: $p}'
+}
+_deps() { # _deps NAME PREV NEW ...: an updated-dependencies-json array
+  local all="[]"
+  while (($# >= 3)); do
+    all="$(jq -c --arg n "$1" --arg p "$2" --arg v "$3" '. + [{dependencyName: $n, prevVersion: $p, newVersion: $v}]' <<<"${all}")"
+    shift 3
+  done
+  printf '%s\n' "${all}"
+}
+_files() { # _files NAME PATCH ...: a PR files API body
+  local all="[]" one
+  while (($# >= 2)); do
+    one="$(_file "$1" "$2")"
+    all="$(jq -c --argjson o "${one}" '. + [$o]' <<<"${all}")"
+    shift 2
+  done
+  printf '%s\n' "${all}"
+}
+default_files="$(_files package.json $'@@ -1 +1 @@\n-  "x": "1.0.0"\n+  "x": "1.0.1"')"
+# policy PREV NEW DEPS: sets decision, reason, out. Env: DEPS_JSON, FILES (files API body), FILES_FAIL=1.
 policy() {
   _fixture
+  local deps_json="${DEPS_JSON-}" name
+  if [[ -z "${DEPS_JSON+x}" ]]; then
+    deps_json="$(
+      tr ',' '\n' <<<"$3" | sed -E 's@^[[:space:]]+|[[:space:]]+$@@g' | { grep -v '^$' || true; } \
+        | while IFS= read -r name; do _dep "${name}" "$1" "$2"; done | jq -sc .
+    )"
+  fi
+  printf '%s\n' "${FILES-${default_files}}" >"${STUB_DIR}/files.json"
+  if [[ -n "${FILES_FAIL-}" ]]; then : >"${STUB_DIR}/fail.api"; fi
   rc=0
-  out="$(PREV_VERSION="$1" NEW_VERSION="$2" DEP_NAMES="$3" ALLOW_MAJOR="${4-false}" \
-    SANITY_CHECKS="${SANITY-tests}" \
+  out="$(PATH="${here}/stub-dependabot:${PATH}" GH_TOKEN=ambient REPO=acme/site PR_NUMBER=7 \
+    PREV_VERSION="$1" NEW_VERSION="$2" DEP_NAMES="$3" ALLOW_MAJOR="${4-false}" \
+    DEPS_JSON="${deps_json}" SANITY_CHECKS="${SANITY-tests}" \
     TRUSTED_NAMESPACES="${5-}" GITHUB_OUTPUT="${STUB_DIR}/out" \
     bash -c "${policy_sh}" 2>&1)" || rc=$?
   decision="$(_out decision)"; reason="$(_out reason)"
@@ -50,6 +85,14 @@ _expect_policy() { # label expected-decision [notice-substring]
     _bad "$1: rc=${rc} decision='${decision}' out=${out}"
   fi
 }
+_expect_downgrade() { # label [notice-substring]: blocked, reason downgrade
+  if [[ "${rc}" -eq 0 && "${decision}" == blocked && "${reason}" == downgrade ]] \
+    && grep -qF -- "${2-}" <<<"${out}"; then
+    _ok "$1"
+  else
+    _bad "$1: rc=${rc} decision='${decision}' reason='${reason}' out=${out}"
+  fi
+}
 
 policy 5.9.3 6.0.3 typescript
 _expect_policy "single untrusted major -> gate (was skip in v2)" gate "major v5 -> v6"
@@ -57,8 +100,133 @@ policy 5.9.3 6.0.3 "typescript, eslint"
 _expect_policy "grouped PR -> gate (was skip in v2)" gate "group of 2"
 policy 5.9.3 5.10.0 typescript
 _expect_policy "single minor -> gate, not --auto" gate "patch/minor within v5"
+if _called "api repos/acme/site/pulls/7/files --paginate [token=ambient]"; then
+  _ok "policy reads the PR's changed files through the API"
+else
+  _bad "files API not read: $(<"${STUB_DIR}/calls.log")"
+fi
 policy abc def typescript
-_expect_policy "unparseable versions -> gate" gate "unparseable version change"
+_expect_downgrade "unparseable versions -> downgrade (fail closed, was gate in v3.1)" "typescript abc -> def"
+
+# --- downgrade: metadata check (v3.2) ---
+# The 2026-11-02 PRs: tag dependabot-auto-merge-v2.1.0 read as newer than v3.1.0.
+gate_pin=smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml
+policy dependabot-auto-merge-v3.1.0 2.1.0 "${gate_pin}"
+_expect_downgrade "dependabot-auto-merge-v3.1.0 -> 2.1.0 -> downgrade" \
+  "${gate_pin} dependabot-auto-merge-v3.1.0 -> 2.1.0"
+# fetch-metadata's "from v?\d" regex drops a prefixed tag, so prev may arrive empty.
+policy "" 2.1.0 "${gate_pin}"
+_expect_downgrade "empty previous version -> downgrade" "${gate_pin}"
+policy 1.0.0 "" foo
+_expect_downgrade "empty new version -> downgrade" "foo 1.0.0 -> "
+fx="$(_deps typescript 5.9.3 5.10.0 eslint 9.1.0 9.0.5 vite 8.2.2 8.3.4)"
+DEPS_JSON="${fx}" policy 5.9.3 5.10.0 "typescript, eslint, vite"
+_expect_downgrade "group with one dependency going down -> downgrade" "eslint 9.1.0 -> 9.0.5"
+policy v3 dependabot-auto-merge-v3 foo
+_expect_downgrade "tag prefix change -> downgrade" "foo v3 -> dependabot-auto-merge-v3"
+policy v3.1.0 dependabot-auto-merge-v3.1.0 foo
+_expect_downgrade "equal versions, different prefixes -> downgrade"
+policy dependabot-auto-merge-v3.1.0 dependabot-auto-merge-v3.0.9 foo
+_expect_downgrade "same prefix, lower version -> downgrade"
+policy 2.0.0 1.9.9 foo
+_expect_downgrade "plain lower version -> downgrade"
+policy 1.10.0 1.9.0 foo
+_expect_downgrade "1.10.0 -> 1.9.0 is numeric, not lexical -> downgrade"
+policy 1.0.0 1.0.0 foo
+_expect_downgrade "equal versions -> downgrade (no increase)"
+policy 1.2.0 1.2.0-rc1 foo
+_expect_downgrade "release -> prerelease of the same base -> downgrade"
+policy 1.2.0-rc2 1.2.0-rc1 foo
+_expect_downgrade "later prerelease -> earlier prerelease -> downgrade"
+policy 5fda3b95a4ea91299a34e894583c3862153e4b97 6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 actions/setup-python
+_expect_downgrade "commit SHAs are not comparable -> downgrade"
+policy abcdef1 abcdef2 foo
+_expect_downgrade "short SHAs with shared leading letters are not versions -> downgrade"
+policy eef6144 b4ffde6 foo
+_expect_downgrade "short SHAs starting with letters -> downgrade"
+# Dependabot "Removes `uuid`" security PRs (tensegrity#136): no versions for the removed one.
+fx="$(_deps uuid "" "" @expo/config-plugins 54.0.4 54.0.6)"
+DEPS_JSON="${fx}" policy "" "" "uuid, @expo/config-plugins"
+_expect_downgrade "removed dependency (no versions) -> downgrade" "uuid"
+DEPS_JSON="not json" policy 1.0.0 1.0.1 foo
+if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
+  _ok "unreadable updated-dependencies-json -> cannot-evaluate"
+else
+  _bad "unreadable deps json: decision='${decision}' reason='${reason}' out=${out}"
+fi
+fx="[]"
+DEPS_JSON="${fx}" policy 1.0.0 1.0.1 foo
+if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
+  _ok "empty updated-dependencies-json -> cannot-evaluate"
+else
+  _bad "empty deps json: decision='${decision}' reason='${reason}' out=${out}"
+fi
+SANITY="" policy 2.0.0 1.0.0 foo
+_expect_downgrade "a downgrade is labeled downgrade even with no sanity_checks"
+for pair in 7.0.0:7.1.0 v4:v5 1.0.261:1.0.262 2026.8.19:2026.10.21 83.0.0:84.1.0 1.3.3:1.4.2 \
+  1.2.0-rc1:1.2.0 1.2.0-rc1:1.2.0-rc2 1.2.0:1.3.0-rc1 dependabot-auto-merge-v3.1.0:dependabot-auto-merge-v3.2.0; do
+  policy "${pair%%:*}" "${pair#*:}" foo
+  _expect_policy "upgrade ${pair%%:*} -> ${pair#*:} still reaches the gate" gate "foo ${pair%%:*} -> ${pair#*:}"
+done
+# The same name twice with two version pairs (tensegrity#125): each pair is checked.
+fx="$(_deps fflate 0.8.2 0.8.3 fflate 0.6.10 0.6.11)"
+DEPS_JSON="${fx}" policy 0.8.2 0.8.3 "fflate, fflate"
+_expect_policy "same dependency twice, both up -> gate" gate "fflate 0.6.10 -> 0.6.11"
+
+# --- downgrade: diff check (v3.2) -------------------------------------
+pin_old="    uses: ${gate_pin}@dependabot-auto-merge-v3.1.0"
+pin_new="    uses: ${gate_pin}@dependabot-auto-merge-v3.2.0"
+fx="$(_files .github/workflows/dependabot-auto-merge.yml $'@@ -1 +1 @@\n-'"${pin_old}"$'\n+'"${pin_new}")"
+FILES="${fx}" policy dependabot-auto-merge-v3.1.0 dependabot-auto-merge-v3.2.0 "${gate_pin}"
+_expect_downgrade "diff touches a smartwatermelon/github-workflows pin -> downgrade even as an upgrade" \
+  "smartwatermelon/github-workflows"
+fx="$(_files .github/workflows/ci.yml $'@@ -1 +1 @@\n-      - uses: "SmartWatermelon/github-workflows@v1"\n+      - uses: "SmartWatermelon/github-workflows@v2"')"
+FILES="${fx}" policy 1.0.0 2.0.0 foo
+_expect_downgrade "first-party pin match is case-insensitive, quoted, repo-root action"
+up_patch=$'@@ -19,7 +19,7 @@\n         with:\n-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0'
+fx="$(_files .github/workflows/ci.yml "${up_patch}")"
+FILES="${fx}" policy 7.0.0 7.1.0 actions/setup-python
+_expect_policy "SHA pin with a rising version comment -> gate" gate
+down_patch=$'@@ -1 +1 @@\n-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0\n+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0'
+fx="$(_files .github/workflows/ci.yml "${down_patch}")"
+FILES="${fx}" policy 7.0.0 7.1.0 actions/setup-python
+_expect_downgrade "version comment goes down in the diff, metadata says up -> downgrade" "actions/setup-python v7.1.0 -> v7.0.0"
+fx="$(_files .github/workflows/ci.yml $'@@ -1 +1 @@\n-    - uses: actions/checkout@v5\n+    - uses: actions/checkout@v4')"
+FILES="${fx}" policy 4 5 actions/checkout
+_expect_downgrade "tag ref goes down in the diff -> downgrade" "actions/checkout v5 -> v4"
+two_pins=$'@@ -1,4 +1,4 @@\n-  - uses: actions/setup-node@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v7.0.0\n+  - uses: actions/setup-node@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb # v7.1.0\n   x\n-  - uses: actions/setup-node@cccccccccccccccccccccccccccccccccccccccc # v6.0.0\n+  - uses: actions/setup-node@dddddddddddddddddddddddddddddddddddddddd # v6.1.0'
+fx="$(_files .github/workflows/ci.yml "${two_pins}")"
+FILES="${fx}" policy 7.0.0 7.1.0 actions/setup-node
+_expect_policy "two pins of one action, both up, are paired in order -> gate" gate
+fx="$(_files .github/workflows/ci.yml -)"
+FILES="${fx}" policy 1.0.0 1.0.1 foo
+if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
+  _ok "YAML file with no readable patch -> cannot-evaluate"
+else
+  _bad "yaml without patch: decision='${decision}' reason='${reason}' out=${out}"
+fi
+fx="$(_files package-lock.json - package.json $'@@ -1 +1 @@\n-1\n+2')"
+FILES="${fx}" policy 1.0.0 1.0.1 foo
+_expect_policy "large lockfile with no patch is not a workflow -> gate" gate
+FILES_FAIL=1 policy 1.0.0 1.0.1 foo
+if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
+  _ok "unreadable PR files -> cannot-evaluate"
+else
+  _bad "files API failure: decision='${decision}' reason='${reason}' out=${out}"
+fi
+FILES="not json" policy 1.0.0 1.0.1 foo
+if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
+  _ok "PR files not JSON -> cannot-evaluate"
+else
+  _bad "files not json: decision='${decision}' reason='${reason}' out=${out}"
+fi
+fx="[]"
+FILES="${fx}" policy 1.0.0 1.0.1 foo
+if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
+  _ok "PR with no changed files -> cannot-evaluate"
+else
+  _bad "no files: decision='${decision}' reason='${reason}' out=${out}"
+fi
 policy 1.0.0 2.0.0 smartwatermelon/thing true smartwatermelon
 _expect_policy "v2 inputs are accepted and reported as ignored" gate "ignored since v3"
 policy 1.0.0 2.0.0 ""
@@ -99,7 +267,7 @@ gate() {
   rc=0
   out="$(PATH="${here}/stub-dependabot:${PATH}" GITHUB_OUTPUT="${STUB_DIR}/out" \
     PR_URL=https://github.com/acme/site/pull/7 HEAD_SHA="${sha}" RUN_ID="${run_id}" \
-    REPO=acme/site BASE_REF=main SANITY_CHECKS="${SANITY-build}" \
+    REPO=acme/site BASE_REF=main SANITY_CHECKS="${SANITY-build}" GH_TOKEN="${TOKEN-checks-token}" \
     SELF_WORKFLOW="Dependabot Auto-Merge" SETTLE_SECONDS=0 POLL_SECONDS=0.1 \
     WAIT_SECONDS="${WAIT:-3}" bash -c "${gate_sh}" 2>&1)" || rc=$?
   result="$(_out gate)"; reason="$(_out reason)"
@@ -121,6 +289,20 @@ gate
 _expect_gate "pending then green (NEUTRAL/skipped allowed) -> pass" pass "" "All 2 other checks"
 polls="$(<"${STUB_DIR}/checks.count")"
 if [[ "${polls}" -ge 3 ]]; then _ok "needs two identical finished polls"; else _bad "passed after ${polls} polls"; fi
+if _called "pr checks https://github.com/acme/site/pull/7 --json name,workflow,bucket,link [token=checks-token]" \
+  && _called "headRefOid [token=checks-token]" \
+  && ! grep -qvF "[token=checks-token]" "${STUB_DIR}/calls.log"; then
+  _ok "every gate read runs as the App token, so private repos can see checks"
+else
+  _bad "gate tokens: $(<"${STUB_DIR}/calls.log")"
+fi
+
+# 1b. no App token for the reads -> merge-failed before any wait, never a GITHUB_TOKEN read
+_fixture; echo "${sha}" >"${STUB_DIR}/head"
+_checks 1 self "build|pass"
+TOKEN="" gate
+_expect_gate "no App token for check reads -> merge-failed" blocked merge-failed "No App token to read checks"
+if [[ ! -s "${STUB_DIR}/calls.log" ]]; then _ok "no gh call without the App token"; else _bad "calls: $(<"${STUB_DIR}/calls.log")"; fi
 
 # 2. a failing non-required check blocks, and names it; main is green
 _fixture; echo "${sha}" >"${STUB_DIR}/head"
@@ -178,6 +360,11 @@ printf '%s\n' "netlify/site/deploy-preview" >"${STUB_DIR}/main-statuses"
 gate
 _expect_gate "failures all red on main too -> main-red" blocked main-red "build (20.x, ubuntu), netlify/site/deploy-preview"
 if _called "commits/main/check-runs"; then _ok "main-red reads the base branch"; else _bad "base branch not read"; fi
+if _called "commits/main/status" && ! grep -F "[token=" "${STUB_DIR}/calls.log" | grep -qvF "[token=checks-token]"; then
+  _ok "base-branch reads run as the App token"
+else
+  _bad "base-branch tokens: $(<"${STUB_DIR}/calls.log")"
+fi
 
 # 11. one failure is only on the PR -> red-check
 _fixture; echo "${sha}" >"${STUB_DIR}/head"
@@ -295,7 +482,7 @@ if _called "pr edit"; then _bad "unexpected pr edit"; else _ok "no label edit wh
 # --- label step --------------------------------------------------------
 label() { # label REASON
   rc=0
-  out="$(PATH="${here}/stub-dependabot:${PATH}" GH_REPO=acme/site \
+  out="$(PATH="${here}/stub-dependabot:${PATH}" GH_REPO=acme/site GH_TOKEN=ambient \
     PR_URL=https://github.com/acme/site/pull/7 REASON="$1" \
     bash -c "${label_sh}" 2>&1)" || rc=$?
 }
@@ -325,12 +512,83 @@ else
   _bad "unknown reason: $(<"${STUB_DIR}/calls.log")"
 fi
 
+_fixture
+label downgrade
+if _called "--add-label dependabot-blocked,dependabot-blocked:downgrade"; then
+  _ok "downgrade is a known reason"
+else
+  _bad "downgrade label: $(<"${STUB_DIR}/calls.log")"
+fi
+
 _fixture; : >"${STUB_DIR}/fail.pr-edit"; : >"${STUB_DIR}/fail.label-create"
 label timeout
 if [[ "${rc}" -eq 0 ]] && grep -qF "::warning::Could not label" <<<"${out}"; then
   _ok "label failures warn, never red"
 else
   _bad "label failure: rc=${rc} out=${out}"
+fi
+
+# --- workflow wiring (v3.2) --------------------------------------------
+_yq() { yq "$1" "${wf}"; }
+steps_q='.jobs.auto-merge.steps'
+idx() { _yq "${steps_q} | to_entries | map(select(.value.name == \"$1\")) | .[0].key"; }
+i_policy="$(idx 'Decide if PR can be evaluated')"
+i_read="$(idx 'Mint App token for check reads')"
+i_gate="$(idx 'Wait for all checks')"
+i_merge_tok="$(idx 'Mint merge App token')"
+i_merge="$(idx 'Approve and merge')"
+if [[ "${i_policy}" =~ ^[0-9]+$ && "${i_read}" =~ ^[0-9]+$ && "${i_gate}" =~ ^[0-9]+$ ]] \
+  && ((i_policy < i_read && i_read < i_gate && i_gate < i_merge_tok && i_merge_tok + 1 == i_merge)); then
+  _ok "downgrade checks, read token, wait, then a fresh merge token right before the merge"
+else
+  _bad "step order: policy=${i_policy} read=${i_read} gate=${i_gate} merge-token=${i_merge_tok} merge=${i_merge}"
+fi
+for v in i_policy i_read i_gate i_merge_tok i_merge; do
+  [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "${v}" '%s' 0
+done
+read_id="$(_yq "${steps_q}[${i_read}].id")"
+merge_tok_id="$(_yq "${steps_q}[${i_merge_tok}].id")"
+gate_token="$(_yq "${steps_q}[${i_gate}].env.GH_TOKEN")"
+merge_token="$(_yq "${steps_q}[${i_merge}].env.APP_TOKEN")"
+if [[ "${read_id}" != "${merge_tok_id}" ]] \
+  && [[ "${gate_token}" == "\${{ steps.${read_id}.outputs.token }}" ]] \
+  && [[ "${merge_token}" == "\${{ steps.${merge_tok_id}.outputs.token }}" ]]; then
+  _ok "the wait reads checks with the read token; the merge uses the re-minted token"
+else
+  _bad "token wiring: read=${read_id} merge=${merge_tok_id} gate=${gate_token} merge=${merge_token}"
+fi
+read_with="$(_yq "${steps_q}[${i_read}].with | to_entries | map(.key + \"=\" + .value) | join(\" \")")"
+if [[ " ${read_with} " == *" permission-checks=read "* \
+  && " ${read_with} " == *" permission-statuses=read "* \
+  && " ${read_with} " == *" repositories=\${{ github.event.repository.name }} "* ]]; then
+  _ok "read token is scoped to this repository with checks: read and statuses: read"
+else
+  _bad "read token permissions: ${read_with}"
+fi
+secret_steps="$(_yq "[${steps_q}[] | select(tostring | test(\"secrets\\.MERGE_APP\")) | .name] | join(\",\")")"
+if [[ "${secret_steps}" == "Mint App token for check reads,Mint merge App token" ]]; then
+  _ok "only the two token steps read the App secrets"
+else
+  _bad "steps reading App secrets: ${secret_steps}"
+fi
+settle="$(_yq "${steps_q}[${i_gate}].env.SETTLE_SECONDS")"
+wait_s="$(_yq "${steps_q}[${i_gate}].env.WAIT_SECONDS")"
+if [[ "${settle}" =~ ^[0-9]+$ && "${wait_s}" =~ ^[0-9]+$ ]] && ((wait_s <= 3600 - 300)) && ((settle < wait_s)); then
+  _ok "the wait (${wait_s}s, settle included) ends at least 5 min before the 1-hour read token expires"
+else
+  _bad "wait ${wait_s}s settle ${settle}s outlives the 1-hour App token"
+fi
+gate_if="$(_yq "${steps_q}[${i_gate}].if")"
+if [[ "${gate_if}" == *"steps.policy.outputs.decision == 'gate'"* ]]; then
+  _ok "the wait runs only after both downgrade checks pass"
+else
+  _bad "gate if: ${gate_if}"
+fi
+policy_deps="$(_yq "${steps_q}[${i_policy}].env.DEPS_JSON")"
+if [[ "${policy_deps}" == *"updated-dependencies-json"* ]]; then
+  _ok "metadata check reads every dependency from updated-dependencies-json"
+else
+  _bad "policy DEPS_JSON not wired: ${policy_deps}"
 fi
 
 echo "${pass} passed, ${fail} failed"

@@ -146,17 +146,58 @@ gate covers the other risk, a bump that breaks the build.
   later Dependabot rebase cannot inherit an armed auto-merge.
 - Since v3.1 the merge runs as the `dependabot-merge-swm` GitHub App. A
   merge made with `GITHUB_TOKEN` starts no `push` workflows, so nothing
-  checked `main` after a gate merge (smartwatermelon/dev-env#229). The App
-  token is minted only after the gate passes, covers only the current
-  repository, and is used only for `gh pr merge`. Without it the PR is
-  labeled `dependabot-blocked:merge-failed`; there is no `GITHUB_TOKEN`
-  fallback. Credentials: `docs/runbooks/dependabot-merge-app.md` in
-  `smartwatermelon/dev-env`.
-- It waits up to 60 minutes. When the head moves, it stops and the run
-  for the new head decides. The job's token has no `checks` permission.
-  On a private repo the check list may come back blank. The
-  self-visibility test turns that into a block, not a false "all green".
+  checked `main` after a gate merge (smartwatermelon/dev-env#229). The
+  merge token is minted fresh after the gate passes, covers only the
+  current repository, and is used only for `gh pr merge`. Without it the
+  PR is labeled `dependabot-blocked:merge-failed`; there is no
+  `GITHUB_TOKEN` fallback. Credentials: `docs/runbooks/dependabot-merge-app.md`
+  in `smartwatermelon/dev-env`.
+- Since v3.2 the wait reads checks with a second, read-only App token
+  (`checks`, `statuses`, `pull-requests` and `contents`: read, this
+  repository only). `GITHUB_TOKEN` has no `checks` permission, so on a
+  private repo it read a blank check list and every PR was labeled
+  `cannot-evaluate`. **The App is now required for every caller, public
+  or private.** Without it the PR is labeled
+  `dependabot-blocked:merge-failed` before the wait starts.
+- It waits up to 55 minutes, settle included, so the wait ends inside the
+  read token's 1-hour life. When the head moves, it stops and the run for
+  the new head decides. The run must see its own check run in the list.
+  If it does not, the App token cannot read checks. The PR is then
+  blocked, not passed as "all green".
 - The major/minor/group classification is logged, never used to decide.
+
+### Downgrades never merge (v3.2)
+
+On 2026-11-02 Dependabot opened downgrade PRs fleet-wide. It read the
+tag `dependabot-auto-merge-v2.1.0` as newer than
+`dependabot-auto-merge-v3.1.0`. The v3.1 gate sent them to the merge
+path. Since v3.2, two independent checks run before the wait. Either one labels the
+PR `dependabot-blocked:downgrade`:
+
+1. **Metadata.** Every entry of fetch-metadata's
+   `updated-dependencies-json` is checked, so a group is covered in full.
+   A leading `v` is ignored. It blocks when:
+   - the new version is lower;
+   - the text before the first digit differs
+     (`dependabot-auto-merge-v3.1.0` to `2.1.0`, or `v3` to
+     `dependabot-auto-merge-v3`);
+   - the versions are equal;
+   - a release goes to a prerelease of the same base (`1.2.0` to
+     `1.2.0-rc1`);
+   - either version is missing or is not a version, such as a commit SHA.
+
+   This fails closed. A dependency that Dependabot *removes* has no
+   versions, so a "Removes `x`" security PR is blocked too.
+2. **Diff.** The changed lines come from the pull request files API; no
+   PR code is checked out or run. Any changed `uses:` line that names
+   `smartwatermelon/github-workflows` blocks: first-party pins move by
+   hand only (smartwatermelon/dev-env#229, decision E). For a third-party
+   `uses: owner/repo@ref # vX.Y.Z` line pair, a lower version comment
+   (or ref, with no comment) blocks. A YAML file with no readable patch,
+   or an unreadable file list, labels `cannot-evaluate`.
+
+Each decision is logged as a `::notice::` naming the dependency and both
+versions.
 
 ### Sanity checks (required)
 
@@ -182,11 +223,12 @@ these labels.
 | --- | --- |
 | `dependabot-blocked:red-check` | A check failed on this PR and is not failing on the base branch. |
 | `dependabot-blocked:main-red` | Every failing check also fails on the base branch head. Fix `main`; the PR is probably fine. |
-| `dependabot-blocked:timeout` | Checks were still running after 60 minutes. |
+| `dependabot-blocked:timeout` | Checks were still running after 55 minutes. |
 | `dependabot-blocked:no-sanity-check` | The caller names no `sanity_checks`, or a named check never ran or never passed. |
 | `dependabot-blocked:no-checks` | No other check ran, or every other check was skipped. Add a required check such as `standards-check`. |
-| `dependabot-blocked:cannot-evaluate` | Empty `dependency-names`, an unreadable PR head or check list, or the run cannot see its own check run. |
-| `dependabot-blocked:merge-failed` | The gate passed but the merge did not happen: no merge App token, or `gh pr merge` failed (head moved, approval missing, or branch protection). |
+| `dependabot-blocked:cannot-evaluate` | Empty `dependency-names` or `updated-dependencies-json`, an unreadable PR head, check list or diff, or the run cannot see its own check run. |
+| `dependabot-blocked:merge-failed` | No App token for the check reads or the merge. Or the gate passed and `gh pr merge` failed: head moved, approval missing, or branch protection. |
+| `dependabot-blocked:downgrade` | A dependency goes down, changes tag family, or has no comparable version, or the diff changes a `smartwatermelon/github-workflows` pin. Since v3.2. |
 
 A PR that later merges has its `dependabot-blocked` labels removed first.
 Creating and adding labels needs only `pull-requests: write`, which the
@@ -280,7 +322,8 @@ checkout of PR-controlled code. This workflow is safe today because it
 never executes PR code. Its only actions are API calls. Two are
 actions: `dependabot/fetch-metadata` and `actions/create-github-app-token`.
 The rest are `gh` commands: `pr review`, `pr merge`, `pr edit` and
-`label create`. **`actions/checkout` must never be added
+`label create`. Since v3.2 it also reads the PR file list and check runs
+with `gh api`. **`actions/checkout` must never be added
 to this file.** The guardrail below enforces this (closes #64):
 
 - `self-review.yml`'s `guard-no-checkout` job greps this repo's own
@@ -303,6 +346,12 @@ A second, unrelated file can't safely "start its own v1" in the same tag
 namespace. (The bare `v1` line is now frozen and deprecated — see
 "The `v1` line is deprecated" under Versioning — but the tag still exists,
 so the namespace collision this prefix avoids is permanent.)
+
+Releases: `dependabot-auto-merge-v3.2.0` adds the downgrade block and
+reads checks as the App (see "Downgrades never merge" and "The gate").
+`dependabot-auto-merge-v3.1.0` moved the merge to the App. The floating
+`dependabot-auto-merge-v3` tag moves by hand, after the rollout pilots
+below.
 
 ### Rollout discipline
 

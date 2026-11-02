@@ -11,7 +11,8 @@ name: Dependabot Auto-Merge
 #  - Uses pull_request_target so the BASE-branch workflow runs, not
 #    the PR branch's — a PR modifying this file cannot bypass itself.
 #  - Never executes PR code; the only actions taken are `gh pr review`
-#    and `gh pr merge`, both GitHub-side API calls.
+#    and `gh pr merge`, both GitHub-side API calls. The diff is read
+#    through the PR files API, never from a checkout.
 #
 #  - Labels use `gh pr edit` and `gh label create`, also API-only.
 #
@@ -56,7 +57,7 @@ name: Dependabot Auto-Merge
 # second, unrelated file cannot safely "start its own v1" in the same
 # repo-wide tag namespace.
 #
-# v3: all-checks gate and blocked labels. v3.1 (this version): merges as an App, so push runs start on main.
+# v3: all-checks gate. v3.1: merges as an App. v3.2: refuses downgrades; reads checks as the App. See README.
 
 on:
   workflow_call:
@@ -108,7 +109,7 @@ jobs:
     # ref, which a human pushing to an existing Dependabot PR can spoof).
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
-    # Bounds the gate's wait (settle + 60 min deadline) with room to label.
+    # Bounds the gate's wait (55 min deadline, settle included) with room to label.
     timeout-minutes: 70
     permissions:
       contents: write
@@ -147,19 +148,57 @@ jobs:
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
 
+      # Also the two downgrade checks (v3.2): metadata and diff, either one blocks.
       - name: Decide if PR can be evaluated
         id: policy
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PREV_VERSION: ${{ steps.metadata.outputs.previous-version }}
           NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
           DEP_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          DEPS_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
           SANITY_CHECKS: ${{ inputs.sanity_checks }}
           TRUSTED_NAMESPACES: ${{ inputs.trusted_namespaces }}
           ALLOW_MAJOR: ${{ inputs.allow_major }}
         run: |
           set -euo pipefail
+          block() { # block REASON MESSAGE
+            echo "decision=blocked" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not merged: $2"
+            exit 0
+          }
           extract_major() {
             printf '%s' "$1" | sed -E 's@^v?([0-9]+).*@\1@' | grep -E '^[0-9]+$' || echo ""
+          }
+          # vcmp OLD NEW: up, down, equal, prefix (tag family changed) or incomparable. Only "up" may merge.
+          vcmp() {
+            local o="${1#v}" n="${2#v}" op np oc nc os ns lo
+            local re='^([0-9]+(\.[0-9]+)*)([-+.]?[0-9A-Za-z][0-9A-Za-z.+-]*)?$'
+            # A commit SHA (whole, or after its leading letters) is never a version.
+            for v in "$o" "$n" "${o#"${o%%[0-9]*}"}" "${n#"${n%%[0-9]*}"}"; do
+              if [[ "$v" =~ ^[0-9a-f]{6,40}$ ]] && [[ "$v" =~ [a-f] ]]; then echo incomparable; return; fi
+            done
+            op="${o%%[0-9]*}"; np="${n%%[0-9]*}"
+            o="${o#"$op"}"; n="${n#"$np"}"
+            if [ -z "$o" ] || [ -z "$n" ]; then echo incomparable; return; fi
+            if [ "$op" != "$np" ]; then echo prefix; return; fi
+            for v in "$o" "$n"; do
+              if [[ ! "$v" =~ $re ]]; then echo incomparable; return; fi
+            done
+            [[ "$o" =~ $re ]]; oc="${BASH_REMATCH[1]}"; os="${BASH_REMATCH[3]}"
+            [[ "$n" =~ $re ]]; nc="${BASH_REMATCH[1]}"; ns="${BASH_REMATCH[3]}"
+            if [ "$oc" = "$nc" ]; then
+              # Same numeric base: a suffix (1.2.0-rc1) sorts before the plain release.
+              if [ "$os" = "$ns" ]; then echo equal; return; fi
+              if [ -z "$os" ]; then echo down; return; fi
+              if [ -z "$ns" ]; then echo up; return; fi
+              oc="$os"; nc="$ns"
+            fi
+            lo=$(printf '%s\n%s\n' "$oc" "$nc" | sort -V | head -n1)
+            if [ "$lo" = "$oc" ]; then echo up; else echo down; fi
           }
           dep_count=$(printf '%s' "${DEP_NAMES:-}" \
             | tr ',' '\n' \
@@ -168,17 +207,81 @@ jobs:
           # Fail closed if dependency-names is missing or whitespace-only:
           # without it the run cannot say what the PR updates.
           if [ "$dep_count" -eq 0 ]; then
-            echo "decision=blocked" >> "$GITHUB_OUTPUT"
-            echo "reason=cannot-evaluate" >> "$GITHUB_OUTPUT"
-            echo "::notice::Not merged: empty dependency-names ($PREV_VERSION -> $NEW_VERSION)"
-            exit 0
+            block cannot-evaluate "empty dependency-names ($PREV_VERSION -> $NEW_VERSION)"
           fi
+
+          # Downgrade check 1: every dependency's metadata, so a group is covered in full.
+          if ! deps=$(printf '%s' "${DEPS_JSON:-}" | jq -er '
+              if type == "array" and length > 0 then . else error("no dependencies") end
+              | .[] | [.dependencyName, .prevVersion, .newVersion]
+              | map((. // "") | tostring | gsub("[\n\r\u001f]"; " ")) | join("\u001f")' 2>/dev/null); then
+            block cannot-evaluate "unreadable updated-dependencies-json"
+          fi
+          while IFS=$'\037' read -r name old new; do
+            verdict=$(vcmp "$old" "$new")
+            if [ "$verdict" != up ]; then
+              block downgrade "downgrade check: $name $old -> $new is $verdict, not an upgrade"
+            fi
+            echo "::notice::Downgrade check (metadata): $name $old -> $new is an upgrade"
+          done <<< "$deps"
+
+          # Downgrade check 2: the diff itself, read through the API (no PR code runs).
+          if ! files=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate 2>/dev/null) \
+            || ! files=$(printf '%s' "$files" | jq -sce '
+                if all(.[]; type == "array") then add else error("not arrays") end
+                | if (. // []) | length > 0 then . else error("no files") end' 2>/dev/null); then
+            block cannot-evaluate "could not read the PR's changed files"
+          fi
+          unread=$(printf '%s' "$files" | jq -r '.[] | select(.patch == null)
+            | select(.filename | test("\\.ya?ml$"; "i")) | .filename' | paste -sd, -)
+          if [ -n "$unread" ]; then
+            block cannot-evaluate "no readable diff for $unread"
+          fi
+          changed=$(printf '%s' "$files" | jq -r 'to_entries[] | .key as $i
+            | (.value.patch // "") | split("\n")[] | select(test("^[-+]")) | "\($i)\u001f\(.)"')
+          # First-party pins move by hand only (dev-env#229 decision E).
+          first=$(printf '%s\n' "$changed" | cut -d$'\037' -f2- \
+            | grep -iE "^[-+][[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[\"']?smartwatermelon/github-workflows[/@]" \
+            | sed -E 's@^([-+])[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*@\1 @' | paste -sd';' - || true)
+          if [ -n "$first" ]; then
+            block downgrade \
+              "downgrade check: the diff changes a smartwatermelon/github-workflows pin ($first); it moves by hand"
+          fi
+          # Third-party pins: pair the k-th removed and k-th added line per file and action.
+          uses_re="^([-+])[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[\"']?([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([^[:space:]\"'#]+)[\"']?([[:space:]]*#[[:space:]]*([^[:space:]]+))?"
+          declare -A count=() old_ver=()
+          pairs=()
+          while IFS=$'\037' read -r file line; do
+            [[ "$line" =~ $uses_re ]] || continue
+            sign="${BASH_REMATCH[1]}"
+            key="$file|${BASH_REMATCH[3],,}"
+            ver="${BASH_REMATCH[6]:-${BASH_REMATCH[4]}}"
+            k="$sign$key"
+            i=${count[$k]:-0}
+            count[$k]=$(( i + 1 ))
+            if [ "$sign" = "-" ]; then
+              old_ver["$key#$i"]="$ver"
+            else
+              pairs+=("$key#$i"$'\037'"$ver")
+            fi
+          done <<< "$changed"
+          for p in "${pairs[@]}"; do
+            slot="${p%%$'\037'*}"; new="${p#*$'\037'}"
+            [ -n "${old_ver[$slot]+x}" ] || continue
+            old="${old_ver[$slot]}"
+            action="${slot#*|}"; action="${action%#*}"
+            verdict=$(vcmp "$old" "$new")
+            case "$verdict" in
+              down|prefix)
+                block downgrade "downgrade check: the diff moves $action $old -> $new ($verdict)" ;;
+              # A bare SHA has no version to compare; the metadata check above covers it.
+              *) echo "::notice::Downgrade check (diff): $action $old -> $new is $verdict" ;;
+            esac
+          done
+
           # Lint alone never proves the code still works (dev-env#229).
           if [ -z "$(printf '%s' "${SANITY_CHECKS:-}" | tr -d ',[:space:]')" ]; then
-            echo "decision=blocked" >> "$GITHUB_OUTPUT"
-            echo "reason=no-sanity-check" >> "$GITHUB_OUTPUT"
-            echo "::notice::Not merged: the caller names no sanity_checks (a check that builds or runs the code)"
-            exit 0
+            block no-sanity-check "the caller names no sanity_checks (a check that builds or runs the code)"
           fi
           if [ -n "${TRUSTED_NAMESPACES:-}" ] || [ "${ALLOW_MAJOR:-false}" = "true" ]; then
             echo "::notice::trusted_namespaces and allow_major are ignored since v3; remove them from the caller"
@@ -198,12 +301,29 @@ jobs:
           echo "decision=gate" >> "$GITHUB_OUTPUT"
           echo "::notice::$kind ($DEP_NAMES: $PREV_VERSION -> $NEW_VERSION); merging after every check passes"
 
+      # GITHUB_TOKEN cannot read private-repo check runs. Read-only, this repo; failure: merge-failed (#87).
+      - name: Mint App token for check reads
+        id: read-token
+        if: steps.policy.outputs.decision == 'gate'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.MERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-checks: read
+          permission-statuses: read
+          permission-pull-requests: read
+          permission-contents: read
+
       # Every exit is gate=pass|blocked|superseded, never red (#87).
       - name: Wait for all checks
         id: gate
         if: steps.policy.outputs.decision == 'gate'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The App token lives 1 hour: WAIT_SECONDS (settle included) stays 5 min under it.
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
@@ -213,7 +333,7 @@ jobs:
           SANITY_CHECKS: ${{ inputs.sanity_checks }}
           SETTLE_SECONDS: '120'
           POLL_SECONDS: '30'
-          WAIT_SECONDS: '3600'
+          WAIT_SECONDS: '3300'
         run: |
           set -euo pipefail
           stop() { # stop GATE REASON MESSAGE
@@ -222,6 +342,12 @@ jobs:
             echo "::notice::Not merged: $3"
             exit 0
           }
+          # No GITHUB_TOKEN fallback: on a private repo it reads a blank check list.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::No App token to read checks. Pass MERGE_APP_CLIENT_ID and MERGE_APP_PRIVATE_KEY," \
+              "and install the dependabot-merge-swm App on this repository."
+            stop blocked merge-failed "No App token to read checks"
+          fi
           # Names of failing checks on the base branch head, one per line.
           main_failing() {
             local runs statuses
@@ -234,6 +360,7 @@ jobs:
           }
           sanity=$(printf '%s' "$SANITY_CHECKS" \
             | jq -Rsc '[splits("[,\n]")] | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+          # The deadline counts from before the settle, so the wait never outlives the token.
           deadline=$(( $(date +%s) + WAIT_SECONDS ))
           # Netlify checks register late: settle, then need two identical finished polls.
           sleep "$SETTLE_SECONDS"
@@ -290,8 +417,8 @@ jobs:
             missing="${missing#m:}"
             bad_names="${bad_names#b:}"
             if [ "$self" -eq 0 ]; then
-              # No checks: read; seeing itself proves the list is not a permission blank.
-              stop blocked cannot-evaluate "this run cannot see its own check run (no checks: read on a private repo?)"
+              # Seeing itself proves the App token reads checks: the list is not a permission blank.
+              stop blocked cannot-evaluate "this run cannot see its own check run (App lacks checks: read?)"
             fi
             if [ "$bad" -gt 0 ]; then
               # main-red: every failing check also fails on the base branch,
@@ -328,7 +455,7 @@ jobs:
             sleep "$POLL_SECONDS"
           done
 
-      # Minted after the gate passes, for this repo only. A failure labels merge-failed, never red (#87).
+      # Fresh token after the wait (the read token may be near its 1-hour end); failure: merge-failed (#87).
       - name: Mint merge App token
         id: app-token
         if: steps.gate.outputs.gate == 'pass'
@@ -390,7 +517,7 @@ jobs:
         run: |
           set -uo pipefail
           case "${REASON:-}" in
-            red-check|main-red|timeout|no-checks|no-sanity-check|cannot-evaluate|merge-failed) ;;
+            red-check|main-red|timeout|no-checks|no-sanity-check|cannot-evaluate|merge-failed|downgrade) ;;
             *) REASON=cannot-evaluate ;;
           esac
           want="dependabot-blocked:${REASON}"

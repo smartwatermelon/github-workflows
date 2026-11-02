@@ -85,13 +85,16 @@ _expect_policy() { # label expected-decision [notice-substring]
     _bad "$1: rc=${rc} decision='${decision}' out=${out}"
   fi
 }
-_expect_downgrade() { # label [notice-substring]: blocked, reason downgrade
-  if [[ "${rc}" -eq 0 && "${decision}" == blocked && "${reason}" == downgrade ]] \
-    && grep -qF -- "${2-}" <<<"${out}"; then
+_expect_reason() { # label reason [notice-substring]: blocked with that reason
+  if [[ "${rc}" -eq 0 && "${decision}" == blocked && "${reason}" == "$2" ]] \
+    && grep -qF -- "${3-}" <<<"${out}"; then
     _ok "$1"
   else
     _bad "$1: rc=${rc} decision='${decision}' reason='${reason}' out=${out}"
   fi
+}
+_expect_downgrade() { # label [notice-substring]: blocked, reason downgrade
+  _expect_reason "$1" downgrade "${2-}"
 }
 
 policy 5.9.3 6.0.3 typescript
@@ -192,11 +195,56 @@ pin_old="    uses: ${gate_pin}@dependabot-auto-merge-v3.1.0"
 pin_new="    uses: ${gate_pin}@dependabot-auto-merge-v3.2.0"
 fx="$(_files .github/workflows/dependabot-auto-merge.yml $'@@ -1 +1 @@\n-'"${pin_old}"$'\n+'"${pin_new}")"
 FILES="${fx}" policy dependabot-auto-merge-v3.1.0 dependabot-auto-merge-v3.2.0 "${gate_pin}"
-_expect_downgrade "diff touches a smartwatermelon/github-workflows pin -> downgrade even as an upgrade" \
-  "smartwatermelon/github-workflows"
+_expect_reason "first-party pin going up -> first-party-pin, never labeled downgrade (v3.3)" first-party-pin \
+  "${gate_pin} dependabot-auto-merge-v3.1.0 -> dependabot-auto-merge-v3.2.0"
 fx="$(_files .github/workflows/ci.yml $'@@ -1 +1 @@\n-      - uses: "SmartWatermelon/github-workflows@v1"\n+      - uses: "SmartWatermelon/github-workflows@v2"')"
 FILES="${fx}" policy 1.0.0 2.0.0 foo
-_expect_downgrade "first-party pin match is case-insensitive, quoted, repo-root action"
+_expect_reason "first-party pin match is case-insensitive, quoted, repo-root action" first-party-pin
+
+# --- first-party pins, name/vX.Y.Z tags (v3.3, dev-env#229) ---
+_fp() { # _fp OLD_REF NEW_REF [OLD_COMMENT NEW_COMMENT]: a files body moving the gate pin
+  local o="    uses: ${gate_pin}@$1" n="    uses: ${gate_pin}@$2"
+  [[ -n "${3-}" ]] && o+=" # $3" && n+=" # $4"
+  _files .github/workflows/dependabot-auto-merge.yml $'@@ -1 +1 @@\n-'"${o}"$'\n+'"${n}"
+}
+policy dependabot-auto-merge/v3.3.0 dependabot-auto-merge/v3.4.0 foo
+_expect_policy "metadata: name/v3.3.0 -> name/v3.4.0 is an upgrade -> gate" gate
+policy dependabot-auto-merge/v3.3.0 dependabot-auto-merge/v3.2.0 foo
+_expect_downgrade "metadata: name/v3.3.0 -> name/v3.2.0 -> downgrade"
+policy dependabot-auto-merge-v3.2.0 dependabot-auto-merge/v3.3.0 foo
+_expect_downgrade "metadata: old name-v tag -> new name/v tag changes family -> downgrade"
+fx="$(_fp dependabot-auto-merge/v3.3.0 dependabot-auto-merge/v3.4.0)"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_reason "diff: name/v pin goes up -> first-party-pin" first-party-pin \
+  "${gate_pin} dependabot-auto-merge/v3.3.0 -> dependabot-auto-merge/v3.4.0"
+fx="$(_fp dependabot-auto-merge/v3.4.0 dependabot-auto-merge/v3.3.0)"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_downgrade "diff: name/v pin goes down while metadata says up -> downgrade" "first-party pin down"
+fx="$(_fp dependabot-auto-merge-v3.2.0 dependabot-auto-merge/v3.3.0)"
+FILES="${fx}" policy 3.2.0 3.3.0 "${gate_pin}"
+_expect_downgrade "diff: old -> new tag scheme is another family -> downgrade"
+fx="$(_fp dependabot-auto-merge/v3.3.0 dependabot-auto-merge/v3.4.0 v9 v1)"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_reason "diff: a first-party pin is judged by its ref, not a trailing comment" first-party-pin
+fx="$(_fp dependabot-auto-merge/v3.4.0 dependabot-auto-merge/v3.3.0 v1 v9)"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_downgrade "diff: a rising comment cannot hide a first-party ref going down"
+fx="$(_fp 5fda3b95a4ea91299a34e894583c3862153e4b97 6d4fd22b20465ccc0f7354476588e8df7c9ca0e0)"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_reason "diff: first-party SHA pins have no direction -> cannot-evaluate" cannot-evaluate
+fx="$(_fp dependabot-auto-merge/v3.3.0 dependabot-auto-merge/v3.3.0)"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_reason "diff: first-party pin unchanged but rewritten -> cannot-evaluate" cannot-evaluate
+fx="$(_files .github/workflows/x.yml $'@@ -1 +1,2 @@\n+    uses: '"${gate_pin}"$'@dependabot-auto-merge/v3.4.0')"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_reason "diff: a first-party pin added with no removed pin -> cannot-evaluate" cannot-evaluate
+fx="$(_files .github/workflows/a.yml $'@@ -1 +1 @@\n-    uses: '"${gate_pin}"$'@dependabot-auto-merge/v3.3.0' \
+  .github/workflows/b.yml $'@@ -1 +1 @@\n+    uses: '"${gate_pin}"$'@dependabot-auto-merge/v3.4.0')"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_reason "diff: first-party removal and addition in different files do not pair -> cannot-evaluate" cannot-evaluate
+fx="$(_files .github/workflows/ci.yml $'@@ -1,2 +1,2 @@\n-    uses: '"${gate_pin}"$'@dependabot-auto-merge/v3.3.0\n+    uses: '"${gate_pin}"$'@dependabot-auto-merge/v3.4.0\n-    - uses: actions/checkout@v5\n+    - uses: actions/checkout@v4')"
+FILES="${fx}" policy 3.3.0 3.4.0 "${gate_pin}"
+_expect_downgrade "diff: first-party up plus a third-party down -> downgrade" "actions/checkout v5 -> v4"
 up_patch=$'@@ -19,7 +19,7 @@\n         with:\n-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0\n+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0'
 fx="$(_files .github/workflows/ci.yml "${up_patch}")"
 FILES="${fx}" policy 7.0.0 7.1.0 actions/setup-python
@@ -532,6 +580,14 @@ if _called "--add-label dependabot-blocked,dependabot-blocked:downgrade"; then
   _ok "downgrade is a known reason"
 else
   _bad "downgrade label: $(<"${STUB_DIR}/calls.log")"
+fi
+
+_fixture
+label first-party-pin
+if _called "--add-label dependabot-blocked,dependabot-blocked:first-party-pin"; then
+  _ok "first-party-pin is a known reason"
+else
+  _bad "first-party-pin label: $(<"${STUB_DIR}/calls.log")"
 fi
 
 _fixture; : >"${STUB_DIR}/fail.pr-edit"; : >"${STUB_DIR}/fail.label-create"

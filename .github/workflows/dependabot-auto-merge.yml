@@ -159,6 +159,7 @@ jobs:
           NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
           DEP_NAMES: ${{ steps.metadata.outputs.dependency-names }}
           DEPS_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          PR_BODY: ${{ github.event.pull_request.body }}
           SANITY_CHECKS: ${{ inputs.sanity_checks }}
           TRUSTED_NAMESPACES: ${{ inputs.trusted_namespaces }}
           ALLOW_MAJOR: ${{ inputs.allow_major }}
@@ -218,6 +219,11 @@ jobs:
             block cannot-evaluate "unreadable updated-dependencies-json"
           fi
           while IFS=$'\037' read -r name old new; do
+            # A parent upgrade can drop a package: no versions, and Dependabot's own "Removes `name`" line.
+            if [ -z "$old" ] && [ -z "$new" ] && grep -qxF -- "Removes \`$name\`" <<< "${PR_BODY//$'\r'/}"; then
+              echo "::notice::Downgrade check (metadata): $name removed (no longer needed by its parent)"
+              continue
+            fi
             verdict=$(vcmp "$old" "$new")
             if [ "$verdict" != up ]; then
               block downgrade "downgrade check: $name $old -> $new is $verdict, not an upgrade"

@@ -186,8 +186,11 @@ PR `dependabot-blocked:downgrade`:
      `1.2.0-rc1`);
    - either version is missing or is not a version, such as a commit SHA.
 
-   This fails closed. A dependency that Dependabot *removes* has no
-   versions, so a "Removes `x`" security PR is blocked too.
+   This fails closed, with one exception. When a parent upgrade makes a
+   package unused, Dependabot removes it. The removed package has no
+   versions, and the PR body has the line "Removes `x`". That package
+   passes; its parent is still checked as above. A single missing version
+   still blocks.
 2. **Diff.** The changed lines come from the pull request files API; no
    PR code is checked out or run. Any changed `uses:` line that names
    `smartwatermelon/github-workflows` blocks: first-party pins move by

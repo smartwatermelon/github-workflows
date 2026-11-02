@@ -73,7 +73,7 @@ policy() {
   rc=0
   out="$(PATH="${here}/stub-dependabot:${PATH}" GH_TOKEN=ambient REPO=acme/site PR_NUMBER=7 \
     PREV_VERSION="$1" NEW_VERSION="$2" DEP_NAMES="$3" ALLOW_MAJOR="${4-false}" \
-    DEPS_JSON="${deps_json}" SANITY_CHECKS="${SANITY-tests}" \
+    DEPS_JSON="${deps_json}" SANITY_CHECKS="${SANITY-tests}" PR_BODY="${BODY-}" \
     TRUSTED_NAMESPACES="${5-}" GITHUB_OUTPUT="${STUB_DIR}/out" \
     bash -c "${policy_sh}" 2>&1)" || rc=$?
   decision="$(_out decision)"; reason="$(_out reason)"
@@ -144,10 +144,24 @@ policy abcdef1 abcdef2 foo
 _expect_downgrade "short SHAs with shared leading letters are not versions -> downgrade"
 policy eef6144 b4ffde6 foo
 _expect_downgrade "short SHAs starting with letters -> downgrade"
-# Dependabot "Removes `uuid`" security PRs (tensegrity#136): no versions for the removed one.
+# "Removes `uuid`" PRs (tensegrity#136): the parent upgrade drops uuid; fetch-metadata gives it no versions.
+rm_body=$'Removes [uuid](https://x). It\'s no longer used.\n\nRemoves `uuid`\nUpdates `@expo/config-plugins` from 54.0.4 to 54.0.6'
 fx="$(_deps uuid "" "" @expo/config-plugins 54.0.4 54.0.6)"
+BODY="${rm_body}" DEPS_JSON="${fx}" policy "" "" "uuid, @expo/config-plugins"
+_expect_policy "removed dependency named in a Removes line -> gate" gate "uuid removed"
 DEPS_JSON="${fx}" policy "" "" "uuid, @expo/config-plugins"
-_expect_downgrade "removed dependency (no versions) -> downgrade" "uuid"
+_expect_downgrade "no versions and no Removes line -> downgrade" "uuid"
+BODY=$'Removes `lodash`' DEPS_JSON="${fx}" policy "" "" "uuid, @expo/config-plugins"
+_expect_downgrade "Removes line names another package -> downgrade" "uuid"
+BODY=$'see Removes `uuid` above' DEPS_JSON="${fx}" policy "" "" "uuid, @expo/config-plugins"
+_expect_downgrade "Removes text not on its own line -> downgrade" "uuid"
+fx="$(_deps uuid "" "" @expo/config-plugins 54.0.6 54.0.4)"
+BODY="${rm_body}" DEPS_JSON="${fx}" policy "" "" "uuid, @expo/config-plugins"
+_expect_downgrade "removal plus a parent going down -> downgrade" "@expo/config-plugins 54.0.6 -> 54.0.4"
+BODY=$'Removes `foo`' policy "" 2.1.0 foo
+_expect_downgrade "Removes line does not excuse an empty previous version" "foo  -> 2.1.0"
+BODY=$'Removes `foo`' policy 1.0.0 "" foo
+_expect_downgrade "Removes line does not excuse a lone empty new version" "foo 1.0.0 -> "
 DEPS_JSON="not json" policy 1.0.0 1.0.1 foo
 if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
   _ok "unreadable updated-dependencies-json -> cannot-evaluate"

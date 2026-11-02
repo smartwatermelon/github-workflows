@@ -191,13 +191,20 @@ PR `dependabot-blocked:downgrade`:
    versions, and the PR body has the line "Removes `x`". That package
    passes; its parent is still checked as above. A single missing version
    still blocks.
-2. **Diff.** The changed lines come from the pull request files API; no
+2. **Diff.** The changed lines come from the pull request files API. No
    PR code is checked out or run. Any changed `uses:` line that names
-   `smartwatermelon/github-workflows` blocks: first-party pins move by
-   hand only (smartwatermelon/dev-env#229, decision E). For a third-party
-   `uses: owner/repo@ref # vX.Y.Z` line pair, a lower version comment
-   (or ref, with no comment) blocks. A YAML file with no readable patch,
-   or an unreadable file list, labels `cannot-evaluate`.
+   `smartwatermelon/github-workflows` blocks, because first-party pins
+   move by hand only (smartwatermelon/dev-env#229). Since v3.3 the label
+   names the direction. It's judged from the refs, never from a comment:
+   - `first-party-pin`: every pin goes up.
+   - `downgrade`: a pin goes down or changes tag family.
+   - `cannot-evaluate`: a line has no partner, or no comparable version,
+     such as a SHA.
+
+   For a third-party `uses: owner/repo@ref # vX.Y.Z` line pair, a lower
+   version comment blocks. With no comment, a lower ref blocks. A YAML
+   file with no readable patch labels `cannot-evaluate`, and so does an
+   unreadable file list.
 
 Each decision is logged as a `::notice::` naming the dependency and both
 versions.
@@ -229,9 +236,10 @@ these labels.
 | `dependabot-blocked:timeout` | Checks were still running after 55 minutes. |
 | `dependabot-blocked:no-sanity-check` | The caller names no `sanity_checks`, or a named check never ran or never passed. |
 | `dependabot-blocked:no-checks` | No other check ran, or every other check was skipped. Add a required check such as `standards-check`. |
-| `dependabot-blocked:cannot-evaluate` | Empty `dependency-names` or `updated-dependencies-json`, an unreadable PR head, check list or diff, or the run cannot see its own check run. |
+| `dependabot-blocked:cannot-evaluate` | Something can't be read: empty `dependency-names` or `updated-dependencies-json`, or the PR head, check list or diff. Also a first-party pin change with no clear direction, or a run that can't see its own check run. |
 | `dependabot-blocked:merge-failed` | No App token for the check reads or the merge. Or the gate passed and `gh pr merge` failed: head moved, approval missing, or branch protection. |
-| `dependabot-blocked:downgrade` | A dependency goes down, changes tag family, or has no comparable version, or the diff changes a `smartwatermelon/github-workflows` pin. Since v3.2. |
+| `dependabot-blocked:downgrade` | A dependency goes down, changes tag family, or has no comparable version. Or the diff moves a `smartwatermelon/github-workflows` pin down or to another tag family. Since v3.2. |
+| `dependabot-blocked:first-party-pin` | The diff moves a `smartwatermelon/github-workflows` pin up. First-party pins move by hand. Since v3.3. |
 
 A PR that later merges has its `dependabot-blocked` labels removed first.
 Creating and adding labels needs only `pull-requests: write`, which the
@@ -284,7 +292,7 @@ jobs:
   # workflows here use a repo-wide semver tag convention (see
   # "Versioning" below), not per-action SHA pinning.
   dependabot-auto-merge:
-    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v3
+    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3.3.0
     with:
       sanity_checks: 'tests' # checks that build or run the code; see "Sanity checks"
     secrets: # these two by name; never `secrets: inherit`
@@ -341,20 +349,26 @@ workflow never decides merges here.
 
 ### Versioning
 
-Tagged with a prefixed namespace — `dependabot-auto-merge-v1`,
-`dependabot-auto-merge-v1.0.0`, etc. — rather than the bare `v1`/`v2`/`v3`
-tags used by `claude-assistant` (and formerly `claude-blocking-review`). Git tags
-are repo-scoped, not per-file; a bare `v1` on this repo already exists.
-A second, unrelated file can't safely "start its own v1" in the same tag
-namespace. (The bare `v1` line is now frozen and deprecated — see
-"The `v1` line is deprecated" under Versioning — but the tag still exists,
-so the namespace collision this prefix avoids is permanent.)
+Tagged `dependabot-auto-merge/vX.Y.Z` since v3.3.0: the workflow name, a
+slash, then a plain semver tag. Git tags are repo-scoped, not per-file. A
+bare `v1` on this repo already exists, so this workflow can't "start its
+own v1". The name prefix keeps the namespaces apart.
 
-Releases: `dependabot-auto-merge-v3.2.0` adds the downgrade block and
-reads checks as the App (see "Downgrades never merge" and "The gate").
-`dependabot-auto-merge-v3.1.0` moved the merge to the App. The floating
-`dependabot-auto-merge-v3` tag moves by hand, after the rollout pilots
-below.
+**Never cut a `dependabot-auto-merge-vX.Y.Z` tag again** (the old form,
+with a dash). Dependabot can't read a version from it. With no version on
+the pin, its cooldown walk ignores the pin. It then proposes the newest tag
+outside the cooldown, even an older one. That is how the
+`dependabot-auto-merge-v3.1.0` -> `2.1.0` PRs appeared on 2026-11-02.
+Dependabot reads `dependabot-auto-merge/v3.3.0` as version 3.3.0 and never
+proposes a lower one. A scratch repo measured both, with the old form as
+the control (smartwatermelon/dev-env#229). The old tags stay, because
+callers still pin them. Nothing new is cut in that form.
+
+Releases: `dependabot-auto-merge/v3.3.0` is the first tag in the new form.
+It labels a first-party pin change by its direction: `first-party-pin`,
+`downgrade` or `cannot-evaluate`. `dependabot-auto-merge-v3.2.0` added the
+downgrade block and reads checks as the App. See "Downgrades never merge"
+and "The gate". `dependabot-auto-merge-v3.1.0` moved the merge to the App.
 
 ### Rollout discipline
 

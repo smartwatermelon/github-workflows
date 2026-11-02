@@ -41,7 +41,7 @@ name: Dependabot Auto-Merge
 #
 #   jobs:
 #     dependabot-auto-merge:
-#       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge-v3
+#       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3.3.0
 #       with:
 #         sanity_checks: 'tests'  # checks that build or run the code; lint is not enough
 #       secrets:
@@ -50,14 +50,9 @@ name: Dependabot Auto-Merge
 #
 # Never `secrets: inherit` (see above).
 #
-# Versioning: this file uses a prefixed tag namespace
-# (dependabot-auto-merge-v1, dependabot-auto-merge-v2, ...) rather
-# than the bare v1/v2/v3 tags used elsewhere in this repo. Those bare
-# tags are already live and consumed by claude-assistant.yml@v1; a
-# second, unrelated file cannot safely "start its own v1" in the same
-# repo-wide tag namespace.
+# Tags: dependabot-auto-merge/vX.Y.Z. Never cut the dash form; see README "Versioning".
 #
-# v3: all-checks gate. v3.1: merges as an App. v3.2: refuses downgrades; reads checks as the App. See README.
+# v3 checks gate; v3.1 App merge; v3.2 no downgrades; v3.3 first-party labels.
 
 on:
   workflow_call:
@@ -245,29 +240,30 @@ jobs:
           fi
           changed=$(printf '%s' "$files" | jq -r 'to_entries[] | .key as $i
             | (.value.patch // "") | split("\n")[] | select(test("^[-+]")) | "\($i)\u001f\(.)"')
-          # First-party pins move by hand only (dev-env#229 decision E).
+          # First-party pins move by hand only (dev-env#229). Any change blocks; the label names its direction.
           first=$(printf '%s\n' "$changed" | cut -d$'\037' -f2- \
             | grep -iE "^[-+][[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[\"']?smartwatermelon/github-workflows[/@]" \
             | sed -E 's@^([-+])[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*@\1 @' | paste -sd';' - || true)
-          if [ -n "$first" ]; then
-            block downgrade \
-              "downgrade check: the diff changes a smartwatermelon/github-workflows pin ($first); it moves by hand"
-          fi
-          # Third-party pins: pair the k-th removed and k-th added line per file and action.
+          fp_verdicts=()
+          fp_moves=()
+          # Pins: pair the k-th removed and k-th added line per file and action.
           uses_re="^([-+])[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[\"']?([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([^[:space:]\"'#]+)[\"']?([[:space:]]*#[[:space:]]*([^[:space:]]+))?"
-          declare -A count=() old_ver=()
+          declare -A count=() old_ver=() old_ref=() new_ref=()
           pairs=()
           while IFS=$'\037' read -r file line; do
             [[ "$line" =~ $uses_re ]] || continue
             sign="${BASH_REMATCH[1]}"
             key="$file|${BASH_REMATCH[3],,}"
-            ver="${BASH_REMATCH[6]:-${BASH_REMATCH[4]}}"
+            ref="${BASH_REMATCH[4]}"
+            ver="${BASH_REMATCH[6]:-$ref}"
             k="$sign$key"
             i=${count[$k]:-0}
             count[$k]=$(( i + 1 ))
             if [ "$sign" = "-" ]; then
               old_ver["$key#$i"]="$ver"
+              old_ref["$key#$i"]="$ref"
             else
+              new_ref["$key#$i"]="$ref"
               pairs+=("$key#$i"$'\037'"$ver")
             fi
           done <<< "$changed"
@@ -276,6 +272,13 @@ jobs:
             [ -n "${old_ver[$slot]+x}" ] || continue
             old="${old_ver[$slot]}"
             action="${slot#*|}"; action="${action%#*}"
+            if [[ "$action" == smartwatermelon/github-workflows || "$action" == smartwatermelon/github-workflows/* ]]; then
+              # First-party: compare the refs themselves, never a trailing comment.
+              old="${old_ref[$slot]}"; new="${new_ref[$slot]}"
+              fp_verdicts+=("$(vcmp "$old" "$new")")
+              fp_moves+=("$action $old -> $new")
+              continue
+            fi
             verdict=$(vcmp "$old" "$new")
             case "$verdict" in
               down|prefix)
@@ -284,6 +287,23 @@ jobs:
               *) echo "::notice::Downgrade check (diff): $action $old -> $new is $verdict" ;;
             esac
           done
+          if [ -n "$first" ]; then
+            fp_lines=$(printf '%s\n' "$first" | tr ';' '\n' | grep -c . || true)
+            moves=$(printf '%s; ' "${fp_moves[@]}"); moves="${moves%; }"
+            all_up=1
+            for v in "${fp_verdicts[@]}"; do
+              if [ "$v" = down ] || [ "$v" = prefix ]; then
+                block downgrade "downgrade check: the diff moves a first-party pin down or to another tag family ($moves)"
+              fi
+              [ "$v" = up ] || all_up=0
+            done
+            # Every changed first-party line must pair up, and every pair must go up; else the direction is unknown.
+            if [ $(( ${#fp_verdicts[@]} * 2 )) -ne "$fp_lines" ] || [ "$all_up" -ne 1 ]; then
+              block cannot-evaluate "a smartwatermelon/github-workflows pin changes with no clear direction ($first)"
+            fi
+            block first-party-pin \
+              "the diff moves a smartwatermelon/github-workflows pin up ($moves); first-party pins move by hand"
+          fi
 
           # Lint alone never proves the code still works (dev-env#229).
           if [ -z "$(printf '%s' "${SANITY_CHECKS:-}" | tr -d ',[:space:]')" ]; then
@@ -523,7 +543,7 @@ jobs:
         run: |
           set -uo pipefail
           case "${REASON:-}" in
-            red-check|main-red|timeout|no-checks|no-sanity-check|cannot-evaluate|merge-failed|downgrade) ;;
+            red-check|main-red|timeout|no-checks|no-sanity-check|cannot-evaluate|merge-failed|downgrade|first-party-pin) ;;
             *) REASON=cannot-evaluate ;;
           esac
           want="dependabot-blocked:${REASON}"

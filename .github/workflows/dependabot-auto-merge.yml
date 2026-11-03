@@ -41,7 +41,7 @@ name: Dependabot Auto-Merge
 #
 #   jobs:
 #     dependabot-auto-merge:
-#       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3.3.0
+#       uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3
 #       with:
 #         sanity_checks: 'tests'  # checks that build or run the code; lint is not enough
 #       secrets:

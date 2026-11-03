@@ -53,6 +53,7 @@ name: Dependabot Auto-Merge
 # Tags: dependabot-auto-merge/vX.Y.Z. Never cut the dash form; see README "Versioning".
 #
 # v3 checks gate; v3.1 App merge; v3.2 no downgrades; v3.3 first-party labels.
+# v3.3.1: the read token gets actions: read, so private repos can read checks.
 
 on:
   workflow_call:
@@ -342,6 +343,8 @@ jobs:
           permission-statuses: read
           permission-pull-requests: read
           permission-contents: read
+          # gh pr checks always reads each check's workflow run; private repos need actions: read.
+          permission-actions: read
 
       # Every exit is gate=pass|blocked|superseded, never red (#87).
       - name: Wait for all checks
@@ -390,6 +393,8 @@ jobs:
           deadline=$(( $(date +%s) + WAIT_SECONDS ))
           # Netlify checks register late: settle, then need two identical finished polls.
           sleep "$SETTLE_SECONDS"
+          # gh's error goes into the cannot-evaluate notice; it was hidden before v3.3.1.
+          checks_err=$(mktemp)
           last=""
           others=""
           pending=""
@@ -413,7 +418,7 @@ jobs:
               stop superseded "" "PR head is now '$head', not $HEAD_SHA; the run for the new head decides"
             fi
             # Exits nonzero while pending/failing; judge the JSON.
-            json=$(gh pr checks "$PR_URL" --json name,workflow,bucket,link 2>/dev/null || true)
+            json=$(gh pr checks "$PR_URL" --json name,workflow,bucket,link 2>"$checks_err" || true)
             # read collapses empty tab fields, so the two name lists carry an m:/b: prefix.
             # Names are joined with \u001f because job names can contain ", ".
             if ! summary=$(printf '%s' "$json" | jq -er \
@@ -437,7 +442,7 @@ jobs:
                       | join("\u001f"))),
                     ("b:" + ($bad | map(.name) | join("\u001f"))) ]
                 | @tsv'); then
-              stop blocked cannot-evaluate "could not read the PR's checks"
+              stop blocked cannot-evaluate "could not read the PR's checks: $(head -c 300 "$checks_err" | tr '\n' ' ')"
             fi
             IFS=$'\t' read -r self others pending bad passed sig missing bad_names <<< "$summary"
             missing="${missing#m:}"

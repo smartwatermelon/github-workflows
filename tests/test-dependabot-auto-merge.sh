@@ -630,8 +630,9 @@ fi
 read_with="$(_yq "${steps_q}[${i_read}].with | to_entries | map(.key + \"=\" + .value) | join(\" \")")"
 if [[ " ${read_with} " == *" permission-checks=read "* \
   && " ${read_with} " == *" permission-statuses=read "* \
+  && " ${read_with} " == *" permission-actions=read "* \
   && " ${read_with} " == *" repositories=\${{ github.event.repository.name }} "* ]]; then
-  _ok "read token is scoped to this repository with checks: read and statuses: read"
+  _ok "read token is scoped to this repository with checks, statuses and actions: read"
 else
   _bad "read token permissions: ${read_with}"
 fi

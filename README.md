@@ -364,7 +364,11 @@ proposes a lower one. A scratch repo measured both, with the old form as
 the control (smartwatermelon/dev-env#229). The old tags stay, because
 callers still pin them. Nothing new is cut in that form.
 
-Releases: `dependabot-auto-merge/v3.3.0` is the first tag in the new form.
+Releases: `dependabot-auto-merge/v3.3.1` adds `actions: read` to the
+read token. `gh pr checks` reads each check's workflow run. On a private
+repo that needs the Actions permission. Without it, v3.3.0 labeled every
+private-repo PR `cannot-evaluate`. The App needs Actions: Read-only.
+`dependabot-auto-merge/v3.3.0` is the first tag in the new form.
 It labels a first-party pin change by its direction: `first-party-pin`,
 `downgrade` or `cannot-evaluate`. `dependabot-auto-merge-v3.2.0` added the
 downgrade block and reads checks as the App. See "Downgrades never merge"

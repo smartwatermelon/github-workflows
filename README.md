@@ -460,6 +460,12 @@ name regardless of which repo you're in.
 | `markdownlint` | boolean | `true` | Run markdownlint-cli2 over Markdown files |
 | `node_floor_check` | boolean | `true` | Fail on Node.js pins below `node_floor` |
 | `node_floor` | string | `"22"` | Lowest supported Node.js major |
+| `dependabot_cooldown_check` | boolean | `true` | Fail when a `.github/dependabot.yml` entry has no cooldown, or a cooldown day count under 3 |
+
+The cooldown check exists because both other cooldown rules are off. zizmor's
+`dependabot-cooldown` and Semgrep's `dependabot-missing-cooldown` want 7 days.
+The fleet uses 3 (smartwatermelon/dev-env, 2026-11-02). Without this check, an
+entry with no cooldown at all would pass.
 
 ### Config precedence
 

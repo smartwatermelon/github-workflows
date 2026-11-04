@@ -43,9 +43,14 @@ for r in "${rulesets[@]}"; do
   fi
   args+=(--config "${r}")
 done
-# Fleet cooldown is 3 days (dev-env, 2026-11-02); this rule wants 7.
-# dotfiles pre-push mirrors this.
-args+=(--exclude-rule package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown)
+# Fleet cooldown and release age are 3 days (dev-env, 2026-11-02); these
+# rules want 7. dotfiles pre-push mirrors this list.
+for rule in dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown \
+  npm.npm-missing-minimum-release-age.npm-missing-minimum-release-age \
+  pnpm.pnpm-missing-minimum-release-age.pnpm-minimum-release-age \
+  bun.bun-missing-minimum-release-age.bun-missing-minimum-release-age; do
+  args+=(--exclude-rule "package_managers.${rule}")
+done
 
 if [[ "${EVENT_NAME}" == "pull_request" ]]; then
   if [[ ! "${BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then

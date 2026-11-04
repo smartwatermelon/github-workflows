@@ -364,7 +364,11 @@ proposes a lower one. A scratch repo measured both, with the old form as
 the control (smartwatermelon/dev-env#229). The old tags stay, because
 callers still pin them. Nothing new is cut in that form.
 
-Releases: `dependabot-auto-merge/v3.3.1` adds `actions: read` to the
+Releases: `dependabot-auto-merge/v3.3.2` needs a readable diff only for
+files that can hold a `uses:` pin: workflows and `action.yml`. The API
+gives no diff for a large change, and v3.3.1 blocked a 1,610-line
+`pnpm-lock.yaml` change as `cannot-evaluate`.
+`dependabot-auto-merge/v3.3.1` adds `actions: read` to the
 read token. `gh pr checks` reads each check's workflow run. On a private
 repo that needs the Actions permission. Without it, v3.3.0 labeled every
 private-repo PR `cannot-evaluate`. The App needs Actions: Read-only.

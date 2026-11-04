@@ -270,6 +270,18 @@ fi
 fx="$(_files package-lock.json - package.json $'@@ -1 +1 @@\n-1\n+2')"
 FILES="${fx}" policy 1.0.0 1.0.1 foo
 _expect_policy "large lockfile with no patch is not a workflow -> gate" gate
+# reliquarist#116: a 1,610-line pnpm-lock.yaml change came back with no patch.
+fx="$(_files pnpm-lock.yaml - package.json $'@@ -1 +1 @@\n-1\n+2')"
+FILES="${fx}" policy 1.3.3 1.4.2 node-forge
+_expect_policy "large YAML lockfile with no patch is not a workflow -> gate" gate
+for f in .github/workflows/ci.yaml action.yml .github/actions/setup/action.yaml; do
+  fx="$(_files "${f}" -)"
+  FILES="${fx}" policy 1.0.0 1.0.1 foo
+  _expect_reason "${f} with no readable patch -> cannot-evaluate" cannot-evaluate
+done
+fx="$(_files docs/workflows/notes.yml - .github/workflows/sub/x.yml -)"
+FILES="${fx}" policy 1.0.0 1.0.1 foo
+_expect_policy "YAML outside .github/workflows and action.yml -> gate" gate
 FILES_FAIL=1 policy 1.0.0 1.0.1 foo
 if [[ "${decision}" == blocked && "${reason}" == cannot-evaluate ]]; then
   _ok "unreadable PR files -> cannot-evaluate"

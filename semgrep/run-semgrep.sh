@@ -43,6 +43,9 @@ for r in "${rulesets[@]}"; do
   fi
   args+=(--config "${r}")
 done
+# Fleet cooldown is 3 days (dev-env, 2026-11-02); this rule wants 7.
+# dotfiles pre-push mirrors this.
+args+=(--exclude-rule package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown)
 
 if [[ "${EVENT_NAME}" == "pull_request" ]]; then
   if [[ ! "${BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then

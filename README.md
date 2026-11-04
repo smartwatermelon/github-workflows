@@ -830,6 +830,13 @@ Dependabot (`pip`, `/semgrep`) bumps it. `SEMGREP_SEND_METRICS=off` and
 `--metrics=off` keep Semgrep from sending usage metrics. Registry rulesets
 (`p/...`) need no token.
 
+**One rule is excluded.** Scan mode passes `--exclude-rule` for p/default's
+`dependabot-missing-cooldown`. That rule fails any Dependabot cooldown under
+7 days, and the fleet cooldown is 3 days by decision (smartwatermelon/dev-env,
+2026-11-02). The dotfiles pre-push hook excludes the same rule, so a push
+sees what CI sees. `semgrep ci` has no `--exclude-rule`; token mode uses the
+platform's policies instead.
+
 ### Setup
 
 `.github/workflows/semgrep-scan.yml` in the caller repo. Keep that file name

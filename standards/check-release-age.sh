@@ -30,24 +30,28 @@ check() {
   fi
 }
 
+# Build the list first: set -e misses a failure in a process substitution,
+# and an empty list reads as "nothing set".
+list="$(mktemp)"
+trap 'rm -f "${list}"' EXIT
+# Tracked files only in a git checkout, so local worktrees are not read.
+if git -C "${repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git -C "${repo}" ls-files -z -- '.npmrc' '*/.npmrc' 'pnpm-workspace.yaml' \
+    '*/pnpm-workspace.yaml' 'bunfig.toml' '*/bunfig.toml' >"${list}"
+else
+  find "${repo}" \( -name node_modules -o -name .git \) -prune -o -type f \
+    \( -name .npmrc -o -name pnpm-workspace.yaml -o -name bunfig.toml \) -print0 >"${list}"
+fi
+
 while IFS= read -r -d '' f; do
+  [[ "${f}" == /* ]] || f="${repo}/${f}"
   case "${f##*/}" in
     .npmrc) check "${f}" 'min-release-age' days 1 ;;
     pnpm-workspace.yaml) check "${f}" 'minimumReleaseAge' minutes 1440 ;;
     bunfig.toml) check "${f}" 'minimumReleaseAge' seconds 86400 ;;
     *) ;;
   esac
-done < <(
-  # Tracked files only in a git checkout, so local worktrees are not read.
-  if git -C "${repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -C "${repo}" ls-files -z -- '.npmrc' '*/.npmrc' 'pnpm-workspace.yaml' \
-      '*/pnpm-workspace.yaml' 'bunfig.toml' '*/bunfig.toml' |
-      while IFS= read -r -d '' p; do printf '%s\0' "${repo}/${p}"; done
-  else
-    find "${repo}" \( -name node_modules -o -name .git \) -prune -o -type f \
-      \( -name .npmrc -o -name pnpm-workspace.yaml -o -name bunfig.toml \) -print0
-  fi
-)
+done <"${list}"
 
 if ((errors > 0)); then exit 1; fi
 if ((checked == 0)); then

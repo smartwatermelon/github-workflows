@@ -67,6 +67,22 @@ expect "an untracked .npmrc is ignored in a git checkout" 0 "${fx}" "1 setting(s
 git -C "${fx}" add -f .claude/worktrees/x/.npmrc
 expect "a tracked nested .npmrc is checked" 1 "${fx}" ".claude/worktrees/x/.npmrc"
 
+# A failing git ls-files must not read as "nothing set".
+mkdir -p "${tmp}/bin"
+# Stub git: rev-parse succeeds, every other command (ls-files) fails.
+cat >"${tmp}/bin/git" <<'STUB'
+#!/bin/sh
+[ "$3" = rev-parse ] && exit 0
+exit 128
+STUB
+chmod +x "${tmp}/bin/git"
+rc=0; out="$(PATH="${tmp}/bin:${PATH}" bash "${checker}" "${fx}" 3 2>&1)" || rc=$?
+if [[ "${rc}" -ne 0 && "${out}" != *"no npm, pnpm or bun"* ]]; then
+  _ok "a failing git ls-files fails the check"
+else
+  _bad "a failing git ls-files: rc=${rc} out=${out}"
+fi
+
 out="$(bash "${checker}" "${tmp}/empty" x 2>&1)" && rc=0 || rc=$?
 if [[ "${rc}" -eq 2 ]]; then _ok "floor 'x' is rejected"; else _bad "floor 'x': rc=${rc} out=${out}"; fi
 

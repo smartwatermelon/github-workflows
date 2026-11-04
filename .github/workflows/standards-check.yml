@@ -65,6 +65,10 @@ on:
         description: Fail when a Dependabot entry has no cooldown or one under 3 days
         type: boolean
         default: true
+      release_age_check:
+        description: Fail when a set npm, pnpm or bun release age is under 3 days
+        type: boolean
+        default: true
       hygiene_label:
         description: >-
           PR label that forces a whole-repo sweep instead of the default
@@ -252,6 +256,7 @@ jobs:
           SKIP_MARKDOWNLINT: ${{ inputs.markdownlint == false && 'markdownlint' || '' }}
           SKIP_NODE_FLOOR: ${{ inputs.node_floor_check == false && 'node-floor' || '' }}
           SKIP_COOLDOWN: ${{ inputs.dependabot_cooldown_check == false && 'dependabot-cooldown' || '' }}
+          SKIP_RELEASE_AGE: ${{ inputs.release_age_check == false && 'release-age' || '' }}
           NODE_FLOOR: ${{ inputs.node_floor }}
           CHANGED_SINCE: ${{ steps.scope.outputs.changed_since }}
         run: |
@@ -259,7 +264,8 @@ jobs:
           [[ "${NODE_FLOOR}" =~ ^[0-9]+$ ]] || { echo "::error::node_floor must be an integer major"; exit 2; }
           skips=()
           for s in "${SKIP_SHELLCHECK}" "${SKIP_YAMLLINT}" "${SKIP_ACTIONLINT}" \
-            "${SKIP_ZIZMOR}" "${SKIP_MARKDOWNLINT}" "${SKIP_NODE_FLOOR}" "${SKIP_COOLDOWN}"; do
+            "${SKIP_ZIZMOR}" "${SKIP_MARKDOWNLINT}" "${SKIP_NODE_FLOOR}" "${SKIP_COOLDOWN}" \
+            "${SKIP_RELEASE_AGE}"; do
             [ -n "${s}" ] && skips+=("${s}")
           done
           skip_list="$(IFS=,; echo "${skips[*]-}")"

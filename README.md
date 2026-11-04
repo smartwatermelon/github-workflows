@@ -292,7 +292,7 @@ jobs:
   # workflows here use a repo-wide semver tag convention (see
   # "Versioning" below), not per-action SHA pinning.
   dependabot-auto-merge:
-    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3.3.0
+    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3
     with:
       sanity_checks: 'tests' # checks that build or run the code; see "Sanity checks"
     secrets: # these two by name; never `secrets: inherit`
@@ -343,9 +343,9 @@ to this file.** The guardrail below enforces this (closes #64):
   `actions/checkout` appears.
 
 This repo auto-merges its own Dependabot PRs through
-`self-dependabot-auto-merge.yml`. It pins `@dependabot-auto-merge/v3`
-rather than a local path, so an unreleased change to the reusable
-workflow never decides merges here.
+`self-dependabot-auto-merge.yml`. It pins a released tag rather than a
+local path, so an unreleased change to the reusable workflow never
+decides merges here. It is also one of the two canaries; see "Canaries".
 
 ### Versioning
 
@@ -388,6 +388,24 @@ new tag. This workflow approves and merges PRs unattended, with no
 fallback reviewer behind it. A bug here ships to every repo pinned to
 the affected tag at once. So it gets the same pilot-then-fleet
 discipline as the org-level rollout work.
+
+The two standing canaries pin an exact release tag. Every other caller
+pins the floating `@dependabot-auto-merge/v3`.
+
+- `smartwatermelon/github-workflows` (public), through
+  `self-dependabot-auto-merge.yml`.
+- `nightowlstudiollc/reliquarist` (private). A public canary cannot catch
+  a private-only failure, and v3.3.0 broke only private repos.
+
+Release order:
+
+1. Cut the exact tag, such as `dependabot-auto-merge/v3.3.2`.
+2. Pin both canaries to it.
+3. On each canary, wait for one Dependabot PR that the gate merges, and
+   for the `push` run on `main` for that merge commit.
+4. Only then move the floating `v3` tag to the same commit.
+
+v3.3.1 skipped this order: `v3` moved before any canary ran it.
 
 ---
 

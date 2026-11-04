@@ -14,7 +14,8 @@ permissions:
 
 jobs:
   dependabot-auto-merge:
-    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3
+    # Public canary: pins an exact tag, ahead of the floating v3. See README "Rollout discipline".
+    uses: smartwatermelon/github-workflows/.github/workflows/dependabot-auto-merge.yml@dependabot-auto-merge/v3.3.2
     with:
       sanity_checks: 'tests' # self-review.yml: tests job
     secrets: # these two by name; never `secrets: inherit`

@@ -67,6 +67,14 @@ expect "an untracked .npmrc is ignored in a git checkout" 0 "${fx}" "1 setting(s
 git -C "${fx}" add -f .claude/worktrees/x/.npmrc
 expect "a tracked nested .npmrc is checked" 1 "${fx}" ".claude/worktrees/x/.npmrc"
 
+# A relative repo path works both outside and inside git.
+fixture rel .npmrc 'min-release-age=1'
+rc=0; out="$(cd "${tmp}" && bash "${checker}" rel 3 2>&1)" || rc=$?
+if [[ "${rc}" -eq 1 && "${out}" == *"min-release-age is 1 days"* ]]; then _ok "a relative path outside git"; else _bad "relative, no git: rc=${rc} out=${out}"; fi
+git -C "${tmp}/rel" init -q && git -C "${tmp}/rel" add .npmrc
+rc=0; out="$(cd "${tmp}" && bash "${checker}" rel 3 2>&1)" || rc=$?
+if [[ "${rc}" -eq 1 && "${out}" == *"min-release-age is 1 days"* ]]; then _ok "a relative path inside git"; else _bad "relative, git: rc=${rc} out=${out}"; fi
+
 # A failing git ls-files must not read as "nothing set".
 mkdir -p "${tmp}/bin"
 # Stub git: rev-parse succeeds, every other command (ls-files) fails.

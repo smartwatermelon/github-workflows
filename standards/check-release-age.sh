@@ -37,14 +37,14 @@ trap 'rm -f "${list}"' EXIT
 # Tracked files only in a git checkout, so local worktrees are not read.
 if git -C "${repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git -C "${repo}" ls-files -z -- '.npmrc' '*/.npmrc' 'pnpm-workspace.yaml' \
-    '*/pnpm-workspace.yaml' 'bunfig.toml' '*/bunfig.toml' >"${list}"
+    '*/pnpm-workspace.yaml' 'bunfig.toml' '*/bunfig.toml' |
+    while IFS= read -r -d '' p; do printf '%s\0' "${repo}/${p}"; done >"${list}"
 else
   find "${repo}" \( -name node_modules -o -name .git \) -prune -o -type f \
     \( -name .npmrc -o -name pnpm-workspace.yaml -o -name bunfig.toml \) -print0 >"${list}"
 fi
 
 while IFS= read -r -d '' f; do
-  [[ "${f}" == /* ]] || f="${repo}/${f}"
   case "${f##*/}" in
     .npmrc) check "${f}" 'min-release-age' days 1 ;;
     pnpm-workspace.yaml) check "${f}" 'minimumReleaseAge' minutes 1440 ;;

@@ -14,3 +14,6 @@ permissions:
 jobs:
   standards-check:
     uses: ./.github/workflows/standards-check.yml
+    with:
+      # No cooldown here by decision: see the dependabot-cooldown note in zizmor.yml (#123).
+      dependabot_cooldown_check: false

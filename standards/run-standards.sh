@@ -5,7 +5,8 @@
 #                    [--changed-since REF]
 #
 # Runs shellcheck, yamllint, actionlint, zizmor, markdownlint, and the
-# Node-floor check over the tracked files of DIR (default: cwd). Exit 0 only
+# Node-floor and Dependabot cooldown-floor checks over the tracked files of
+# DIR (default: cwd). Exit 0 only
 # when every enabled linter is clean. A linter with nothing to lint passes
 # with a notice — absence of files is not a failure.
 #
@@ -293,6 +294,13 @@ fi
 if _skipped node-floor; then echo "== node-floor: skipped by input"; else
   _header node-floor
   _lint node-floor bash "${config_dir}/check-node-floor.sh" "${repo}" "${node_floor}"
+fi
+
+# dependabot-cooldown: each Dependabot entry needs a cooldown of 3+ days
+# (dev-env, 2026-11-02).
+if _skipped dependabot-cooldown; then echo "== dependabot-cooldown: skipped by input"; else
+  _header dependabot-cooldown
+  _lint dependabot-cooldown bash "${config_dir}/check-dependabot-cooldown.sh" "${repo}" 3
 fi
 
 # claude-ignore: warning-only (dev-env#178); never adds to failed[].

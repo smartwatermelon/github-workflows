@@ -38,22 +38,23 @@ run() {
 }
 called() { [[ -f "${STUB_DIR}/argv.log" ]]; }
 nl=$'\n'
+xr=package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown
 
 # 1. pull_request, no token: diff-aware scan against the base
 run EVENT_NAME=pull_request BASE_SHA="${base}"
-want="scan${nl}--error${nl}--metrics=off${nl}--config${nl}p/default${nl}--config${nl}p/python${nl}--baseline-commit${nl}${base}"
+want="scan${nl}--error${nl}--metrics=off${nl}--config${nl}p/default${nl}--config${nl}p/python${nl}--exclude-rule${nl}${xr}${nl}--baseline-commit${nl}${base}"
 if [[ "${rc}" -eq 0 && "${argv}" == "${want}" ]]; then _ok "pull_request runs scan --error with --baseline-commit"; else _bad "pull_request: rc=${rc} argv=${argv} err=${err}"; fi
 
 # 2. push and workflow_dispatch: full scan, no baseline
 for ev in push workflow_dispatch; do
   run EVENT_NAME="${ev}" BASE_SHA="${base}"
-  want="scan${nl}--error${nl}--metrics=off${nl}--config${nl}p/default${nl}--config${nl}p/python"
+  want="scan${nl}--error${nl}--metrics=off${nl}--config${nl}p/default${nl}--config${nl}p/python${nl}--exclude-rule${nl}${xr}"
   if [[ "${rc}" -eq 0 && "${argv}" == "${want}" ]]; then _ok "${ev} runs a full scan"; else _bad "${ev}: rc=${rc} argv=${argv} err=${err}"; fi
 done
 
 # 3. newline-separated rulesets split the same as spaces
 run EVENT_NAME=push RULESETS=$'p/default\n  p/ruby\n'
-want="scan${nl}--error${nl}--metrics=off${nl}--config${nl}p/default${nl}--config${nl}p/ruby"
+want="scan${nl}--error${nl}--metrics=off${nl}--config${nl}p/default${nl}--config${nl}p/ruby${nl}--exclude-rule${nl}${xr}"
 if [[ "${rc}" -eq 0 && "${argv}" == "${want}" ]]; then _ok "newline-separated rulesets"; else _bad "newline rulesets: rc=${rc} argv=${argv}"; fi
 
 # 4. token set: semgrep ci, no --config, token only in the environment

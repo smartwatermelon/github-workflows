@@ -54,6 +54,7 @@ name: Dependabot Auto-Merge
 #
 # v3 checks gate; v3.1 App merge; v3.2 no downgrades; v3.3 first-party labels.
 # v3.3.1: the read token gets actions: read, so private repos can read checks.
+# v3.3.2: only workflow and action.yml files need a readable diff, not lockfiles.
 
 on:
   workflow_call:
@@ -234,8 +235,11 @@ jobs:
                 | if (. // []) | length > 0 then . else error("no files") end' 2>/dev/null); then
             block cannot-evaluate "could not read the PR's changed files"
           fi
+          # Only workflows and action.yml hold uses: pins. A big pnpm-lock.yaml
+          # has no API patch and must not block (reliquarist#116).
           unread=$(printf '%s' "$files" | jq -r '.[] | select(.patch == null)
-            | select(.filename | test("\\.ya?ml$"; "i")) | .filename' | paste -sd, -)
+            | select(.filename | test("(^|/)\\.github/workflows/[^/]+\\.ya?ml$|(^|/)action\\.ya?ml$"; "i"))
+            | .filename' | paste -sd, -)
           if [ -n "$unread" ]; then
             block cannot-evaluate "no readable diff for $unread"
           fi

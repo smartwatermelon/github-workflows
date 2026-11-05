@@ -533,10 +533,15 @@ if _called "--match-head-commit ${sha} https://github.com/acme/site/pull/7 [toke
 else
   _bad "merge token: $(<"${STUB_DIR}/calls.log")"
 fi
-if _called "pr review --approve https://github.com/acme/site/pull/7 [token=ambient]"; then
-  _ok "only the merge uses the App token"
+if _called "pr review --approve https://github.com/acme/site/pull/7 [token=app-token]"; then
+  _ok "approval runs as the App, so a required-review ruleset accepts it"
 else
   _bad "approve token: $(<"${STUB_DIR}/calls.log")"
+fi
+if _called "--remove-label dependabot-blocked,dependabot-blocked:timeout [token=ambient]"; then
+  _ok "labels keep the ambient token"
+else
+  _bad "label token: $(<"${STUB_DIR}/calls.log")"
 fi
 
 _fixture
@@ -546,6 +551,11 @@ if [[ "${rc}" -eq 0 && "${reason}" == "merge-failed" ]] && ! _called "pr merge" 
   _ok "no App token -> merge-failed, never a GITHUB_TOKEN merge"
 else
   _bad "no App token: rc=${rc} reason='${reason}' calls=$(<"${STUB_DIR}/calls.log")"
+fi
+if _called "pr review --approve https://github.com/acme/site/pull/7 [token=ambient]"; then
+  _ok "no App token -> approval falls back to the ambient token"
+else
+  _bad "no-App approve token: $(<"${STUB_DIR}/calls.log")"
 fi
 
 _fixture; : >"${STUB_DIR}/fail.pr-merge"

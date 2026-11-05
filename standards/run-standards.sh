@@ -5,8 +5,8 @@
 #                    [--changed-since REF]
 #
 # Runs shellcheck, yamllint, actionlint, zizmor, markdownlint, and the
-# Node-floor and Dependabot cooldown-floor checks over the tracked files of
-# DIR (default: cwd). Exit 0 only
+# Node-floor, Dependabot cooldown and release-age floor checks over the
+# tracked files of DIR (default: cwd). Exit 0 only
 # when every enabled linter is clean. A linter with nothing to lint passes
 # with a notice — absence of files is not a failure.
 #
@@ -301,6 +301,13 @@ fi
 if _skipped dependabot-cooldown; then echo "== dependabot-cooldown: skipped by input"; else
   _header dependabot-cooldown
   _lint dependabot-cooldown bash "${config_dir}/check-dependabot-cooldown.sh" "${repo}" 3
+fi
+
+# release-age: a set npm, pnpm or bun release age must be 3+ days. Unset
+# passes by decision (dev-env, 2026-11-04).
+if _skipped release-age; then echo "== release-age: skipped by input"; else
+  _header release-age
+  _lint release-age bash "${config_dir}/check-release-age.sh" "${repo}" 3
 fi
 
 # claude-ignore: warning-only (dev-env#178); never adds to failed[].

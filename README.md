@@ -147,11 +147,14 @@ gate covers the other risk, a bump that breaks the build.
 - Since v3.1 the merge runs as the `dependabot-merge-swm` GitHub App. A
   merge made with `GITHUB_TOKEN` starts no `push` workflows, so nothing
   checked `main` after a gate merge (smartwatermelon/dev-env#229). The
-  merge token is minted fresh after the gate passes, covers only the
-  current repository, and is used only for `gh pr merge`. Without it the
-  PR is labeled `dependabot-blocked:merge-failed`; there is no
-  `GITHUB_TOKEN` fallback. Credentials: `docs/runbooks/dependabot-merge-app.md`
-  in `smartwatermelon/dev-env`.
+  merge token is minted fresh after the gate passes. It covers only the
+  current repository.
+- Since v3.3.3 the App also approves the PR. A ruleset that requires a
+  review rejects an approval from `GITHUB_TOKEN`. With no App token the
+  approval still uses `GITHUB_TOKEN`, but the merge does not run. The PR
+  is then labeled `dependabot-blocked:merge-failed`. The merge never
+  falls back to `GITHUB_TOKEN`. Credentials:
+  `docs/runbooks/dependabot-merge-app.md` in `smartwatermelon/dev-env`.
 - Since v3.2 the wait reads checks with a second, read-only App token
   (`checks`, `statuses`, `pull-requests` and `contents`: read, this
   repository only). `GITHUB_TOKEN` has no `checks` permission, so on a

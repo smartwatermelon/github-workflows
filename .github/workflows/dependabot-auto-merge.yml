@@ -27,9 +27,8 @@ name: Dependabot Auto-Merge
 #
 # Callers pass MERGE_APP_CLIENT_ID and MERGE_APP_PRIVATE_KEY by name, never `secrets: inherit` (see README).
 #
-# `gh pr review --approve` satisfies branch-protection rules that
-# require review; it's a no-op on repos where no approving review is
-# required.
+# The merge App approves the PR, which meets a required review;
+# GITHUB_TOKEN cannot approve under a ruleset.
 #
 # Every `gh` call degrades to a ::warning:: or a label, never a red run (#87).
 #
@@ -516,8 +515,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -uo pipefail
-          gh pr review --approve "$PR_URL" \
-            || echo "::warning::Approval failed (check can_approve_pull_request_reviews setting); continuing."
+          # Approve as the App: a ruleset that requires a review rejects
+          # GITHUB_TOKEN ("not permitted to approve").
+          GH_TOKEN="${APP_TOKEN:-$GH_TOKEN}" gh pr review --approve "$PR_URL" \
+            || echo "::warning::Approval failed; continuing. A required review then blocks the merge."
           # Clear labels an earlier run left; this head passed.
           stale=$(gh pr view "$PR_URL" --json labels --jq '.labels[].name' 2>/dev/null \
             | grep '^dependabot-blocked' | paste -sd, - || true)

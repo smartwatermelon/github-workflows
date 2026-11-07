@@ -15,7 +15,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     commit-message:
       prefix: "chore"
     # Default is 5. Only 3 actions are tracked here today, so the cap is not
@@ -34,6 +34,6 @@ updates:
   - package-ecosystem: "pip"
     directory: "/semgrep"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     commit-message:
       prefix: "chore"

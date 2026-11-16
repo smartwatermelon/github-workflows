@@ -465,6 +465,14 @@ name regardless of which repo you're in.
 | `node_floor` | string | `"22"` | Lowest supported Node.js major |
 | `dependabot_cooldown_check` | boolean | `true` | Fail when a `.github/dependabot.yml` entry has no cooldown, or a cooldown day count under 3 |
 | `release_age_check` | boolean | `true` | Fail when a set npm, pnpm or bun release age is under 3 days |
+| `runner` | string | `"ubuntu-latest"` | Runner label for the job |
+
+nightowlstudiollc private repos pass
+`runner: ${{ vars.NOS_RUNNER || 'ubuntu-latest' }}` to run the check on the
+MIMOLETTE runner, which is arm64. The workflow picks each linter download and
+checksum from `RUNNER_ARCH` (X64 or ARM64), not from this input, so a
+failover to `ubuntu-latest` keeps working. Leave the input out everywhere
+else.
 
 The cooldown check exists because both other cooldown rules are off. zizmor's
 `dependabot-cooldown` and Semgrep's `dependabot-missing-cooldown` want 7 days.

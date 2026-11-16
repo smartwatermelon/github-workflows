@@ -97,6 +97,9 @@ env:
   ZIZMOR_VERSION: "1.30.0"
   ZIZMOR_SHA256: "ec8c95cd800845abb9bbc5f377ec7c57d2eb8e2386a00a201d3a74ee4092e5ed"
   ZIZMOR_SHA256_ARM64: "018a024d6b6d09733b07f6ef42838d984c23ec04bc9b2acd55f7d67826aeafe5"
+  YQ_VERSION: "4.54.3"
+  YQ_SHA256: "129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973"
+  YQ_SHA256_ARM64: "89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67"
   YAMLLINT_VERSION: "1.38.0"
   MARKDOWNLINT_CLI2_VERSION: "0.23.2"
 
@@ -224,6 +227,7 @@ jobs:
           SKIP_ZIZMOR: ${{ inputs.zizmor == false }}
           SKIP_YAMLLINT: ${{ inputs.yamllint == false }}
           SKIP_MARKDOWNLINT: ${{ inputs.markdownlint == false }}
+          SKIP_COOLDOWN_YQ: ${{ inputs.dependabot_cooldown_check == false }}
         run: |
           set -euo pipefail
           mkdir -p "${HOME}/.local/bin"; echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
@@ -234,11 +238,13 @@ jobs:
               SC_ARCH=x86_64; SC_SHA="${SHELLCHECK_SHA256}"
               AL_ARCH=amd64; AL_SHA="${ACTIONLINT_SHA256}"
               ZZ_ARCH=x86_64; ZZ_SHA="${ZIZMOR_SHA256}"
+              YQ_ARCH=amd64; YQ_SHA="${YQ_SHA256}"
               ;;
             ARM64)
               SC_ARCH=aarch64; SC_SHA="${SHELLCHECK_SHA256_ARM64}"
               AL_ARCH=arm64; AL_SHA="${ACTIONLINT_SHA256_ARM64}"
               ZZ_ARCH=aarch64; ZZ_SHA="${ZIZMOR_SHA256_ARM64}"
+              YQ_ARCH=arm64; YQ_SHA="${YQ_SHA256_ARM64}"
               ;;
             *)
               echo "::error::unsupported runner architecture '${RUNNER_ARCH}' (X64 and ARM64 are supported)"
@@ -266,6 +272,14 @@ jobs:
             echo "${ZZ_SHA}  /tmp/zizmor.tar.gz" | sha256sum -c -
             mkdir -p /tmp/zizmor && tar -xzf /tmp/zizmor.tar.gz -C /tmp/zizmor
             install -m 0755 "$(find /tmp/zizmor -type f -name zizmor | head -1)" "${HOME}/.local/bin/zizmor"
+          fi
+          # The cooldown check reads dependabot.yml with yq. Hosted runners
+          # ship one; self-hosted images may not, so pin our own.
+          if [ "${SKIP_COOLDOWN_YQ}" != "true" ]; then
+            curl -Lfso /tmp/yq \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${YQ_ARCH}"
+            echo "${YQ_SHA}  /tmp/yq" | sha256sum -c -
+            install -m 0755 /tmp/yq "${HOME}/.local/bin/yq"
           fi
           if [ "${SKIP_YAMLLINT}" != "true" ]; then
             pipx install "yamllint==${YAMLLINT_VERSION}"

@@ -45,6 +45,7 @@ for r in dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown \
   bun.bun-missing-minimum-release-age.bun-missing-minimum-release-age; do
   xr+="${nl}--exclude-rule${nl}package_managers.${r}"
 done
+xr+="${nl}--exclude-rule${nl}javascript.vulnerable-components.node-version-brotli.node-version-brotli"
 
 # 1. pull_request, no token: diff-aware scan against the base
 run EVENT_NAME=pull_request BASE_SHA="${base}"

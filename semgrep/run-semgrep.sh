@@ -51,6 +51,9 @@ for rule in dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown \
   bun.bun-missing-minimum-release-age.bun-missing-minimum-release-age; do
   args+=(--exclude-rule "package_managers.${rule}")
 done
+# Fleet version files name a bare Node major on purpose; this rule forces
+# a stale patch pin. Off 2026-11-20; dotfiles pre-push mirrors it.
+args+=(--exclude-rule javascript.vulnerable-components.node-version-brotli.node-version-brotli)
 
 if [[ "${EVENT_NAME}" == "pull_request" ]]; then
   if [[ ! "${BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
